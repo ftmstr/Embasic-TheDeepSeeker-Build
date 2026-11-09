@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 count=$(find tests -maxdepth 1 -name 'test-*.cjs' | wc -l)
-test "$count" -eq 78
+test "$count" -eq 79
 for path in tests/test-*.cjs; do node "$path"; done
 python tests/test-package.py
 python tests/test-ui-smoke.py
