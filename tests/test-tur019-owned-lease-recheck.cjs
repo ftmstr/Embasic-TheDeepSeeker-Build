@@ -1,0 +1,22 @@
+'use strict';
+const assert=require('node:assert/strict');
+const api=require('../extension/remote-claim.js');
+const {githubServer}=require('./tur017-mock-github.cjs');
+(async()=>{
+  const s=githubServer(),claim=s.claim();
+  let lease=true;
+  const deps={request:s.request,persistIntent:async()=>true,checkLease:async()=>lease};
+  const first=await api.acquire(claim,deps);
+  assert.equal(first.status,'owned');
+  const posts=s.stats.post;
+  lease=false;
+  await assert.rejects(api.acquire(claim,deps),{code:'CLAIM_LEASE_DENIED'});
+  assert.equal(s.stats.post,posts,'already-owned must not replay POST');
+  lease=true;
+  const prior={...claim};
+  assert.equal((await api.acquire(claim,{...deps,previousIntent:prior})).status,'owned');
+  lease=false;
+  await assert.rejects(api.acquire(claim,{...deps,previousIntent:prior}),{code:'CLAIM_LEASE_DENIED'});
+  assert.equal(s.stats.post,posts);
+  console.log('PASS TUR019 already-owned claim revalidates live lease including persisted intent');
+})().catch(e=>{console.error(e);process.exitCode=1});

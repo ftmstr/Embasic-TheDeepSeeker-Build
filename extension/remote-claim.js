@@ -57,7 +57,7 @@
       throw fail('CLAIM_STALE_INTENT','A durable claim exists for another owner or report digest.');
     // Reconcile before creating. A remote ref may already exist for this run.
     const first=await observe(claim,request);
-    if(first.status==='owned')return first;
+    if(first.status==='owned'){await requireLease(checkLease);return first;}
     if(previousIntent)throw fail('CLAIM_UNCERTAIN_NO_REPLAY',
       'Previous remote claim POST may have committed; stale GET 404 does not authorize replay.');
     await requireLease(checkLease);
@@ -71,7 +71,7 @@
     } catch(error){
       // 401/403/409/422/429 and transport errors can follow a remote COMMIT.
       // ONE read-only reconciliation, never a second POST in this call.
-      try {const result=await observe(claim,request);if(result.status==='owned')return result;}
+      try {const result=await observe(claim,request);if(result.status==='owned'){await requireLease(checkLease);return result;}}
       catch(e){if(e.code==='CLAIM_FOREIGN_OWNER'||e.code==='CLAIM_COMMIT_MISMATCH'||e.code==='CLAIM_REF_MALFORMED')throw e;}
       throw fail('CLAIM_UNCERTAIN_NO_REPLAY',
         'Claim POST ACK is uncertain; remote identity must be reconciled without replay.');
