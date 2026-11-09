@@ -1,3 +1,15 @@
+# EMBASIC DeepSeek Agent v1.12.0 — TUR 013
+
+**Durum:** PC_TEST_CANDIDATE / PRODUCTION_NO_GO. DeepSeek Free web sohbetinde insansız mesaj/DOM otomasyonu yoktur.
+
+## TUR013 — GitHub PUT/ACK belirsizliği, şifreli kalıcı journal
+
+- Bir GitHub raporu için yeni `PUT` gerekliyse, ilk uzak mutasyondan **önce** görev bazında `githubUncertainCommit` işareti şifreli durumda kalıcı kaydedilir. Kayıt başarısızsa ağ yazması başlamaz.
+- GitHub PUT sunucuda işlenip yanıt kaybolursa ileride dosya GET'i geçici 404 olsa bile **ikinci PUT yasaktır**. Uzak içerik gerçek baytları ile eşleşince önceki tur senkronize kabul edilebilir; uyuşmazlıkta üzerine yazılmaz.
+- Lease/stale revision/public consent kontrolleri devam eder. Kalıcı işaret öncesi ve sonrasında lease yeniden sınanır. Journal bir bağımsız sağlam depolama veya tam exactly-once garantisi değildir.
+- Dört yeni adversarial Node.js testi eklendi. 50 Node + paket + simüle Chromium UI = 52 yerel test grubu hedefi. Windows gerçek Chrome MV3, kullanıcı hesabı OAuth/Drive ve canlı GitHub API entegrasyon testleri **NOT_RUN**.
+- Kanonik Github: ftmstr/Embasic-TheDeepSeeker-Build; TUR012 bootstrap Draft PR #1 üzerine TUR013 stacked Draft PR. Main'e merge yapılmaz.
+
 # EMBASIC DeepSeek Agent v1.11.0 — TUR 012
 
 **Durum: PC_TEST_CANDIDATE / NOT_PRODUCTION_VERIFIED**. DeepSeek Free web sohbetini otomatik çalıştırma, otomatik DOM okuma veya kullanıcı müdahalesiz model çağrısı **yoktur**. Saatlik alarm kullanıcı onayına sunulacak talimat oluşturur; onaylanmış sonuçlar izinli resmi Google Drive / GitHub API'larıyla arşivlenebilir. Bilgisayar kapalı/uykuda ya da şifreli kasa kilitliyken otomatik çalışma garantisi yoktur.

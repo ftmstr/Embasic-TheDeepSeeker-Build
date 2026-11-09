@@ -1,5 +1,5 @@
 'use strict';
-/* EMBASIC DeepSeek Agent 1.10 — task orchestration + approved result sync.
+/* EMBASIC DeepSeek Agent 1.12 — task orchestration + approved result sync.
  * DeepSeek Chat UI automation/scraping is intentionally NOT implemented.
  * GitHub and Google Drive use their documented, authorised APIs.
  */
@@ -54,6 +54,7 @@ function normalizeState(raw) {
     runs:raw.runs.map(run=>({ ...run, sourceRepo:run.sourceRepo||'', publicConsentAtCompletion:run.publicConsentAtCompletion===true, publicConsentManual:run.publicConsentManual===true, githubAttempts:run.githubAttempts||0, driveAttempts:run.driveAttempts||0,
       githubRetryAfter:run.githubRetryAfter||null, driveRetryAfter:run.driveRetryAfter||null,
       syncConsent:run.syncConsent!==false, syncLease:run.syncLease||{},
+      githubUncertainCommit:run.githubUncertainCommit===true,
       driveUncertainCommit:run.driveUncertainCommit===true,
       driveUncertainFolder:(run.driveUncertainFolder&&typeof run.driveUncertainFolder.name==='string'&&
         typeof run.driveUncertainFolder.parent==='string')?
@@ -578,7 +579,7 @@ async function ensureGithubBranch(task,checkLease=async()=>true) {
   catch(e){if(!(await githubRequest(`${root}/git/ref/heads/${branch}`,{allow404:true})))throw e;}
   return branch;
 }
-async function githubUpload(run,task,checkLease=async()=>true) {
+async function githubUpload(run,task,checkLease=async()=>true,persistWriteIntent=async()=>{}) {
   if(!task.repo)return;
   if(run.project!==task.project||run.taskId!==task.id)
     throw new Error('Turun proje kimliği eşleşmiyor; GitHub aktarımı engellendi.');
@@ -598,8 +599,12 @@ async function githubUpload(run,task,checkLease=async()=>true) {
   if(current){
     if(current.type!=='file'||!current.content)throw new Error('GitHub üzerinde aynı yolda doğrulanamayan dosya var; üzerine yazılmadı.');
     const previous=decodeBase64Utf8(current.content);
-    if(previous===content)return; // response-loss recovery: no duplicate commit
+    if(previous===content)return; // authenticated remote bytes reconcile uncertain ACK without replay
     throw new Error('GitHub raporu uzakta değişmiş; güvenlik için mevcut içerik üzerine yazılmadı.');
+  }
+  if(run.githubUncertainCommit===true){
+    const error=new Error('Önceki GitHub PUT sonucu belirsiz; uzak dosya doğrulanmadan yeni PUT gönderilmeyecek.');
+    error.remoteCommitUncertain=true;error.transient=true;throw error;
   }
   // The repository might change from PRIVATE to PUBLIC between the first
   // visibility check and the actual write. Revalidate immediately before PUT;
@@ -609,9 +614,20 @@ async function githubUpload(run,task,checkLease=async()=>true) {
   if(latestRepository.private!==true &&
      !(run.publicConsentAtCompletion===true||run.publicConsentManual===true))
     throw new Error('GitHub deposunun görünürlüğü değişti; public yazma için bu tura özel onay gerekli.');
+  // Persist the uncertainty marker BEFORE any remote mutation. An MV3 worker
+  // can die between remote COMMIT and ACK; on resume, absence of the file
+  // (eventual consistency) is not permission to send another PUT.
+  await persistWriteIntent();
   await checkLease();
-  await githubRequest(url,{method:'PUT',body:{message:`docs(agent): record reviewed run ${run.id.slice(0,8)}`,
-    content:encodeBase64Utf8(content),branch,...(current?.sha?{sha:current.sha}:{})}});
+  try {
+    await githubRequest(url,{method:'PUT',body:{message:`docs(agent): record reviewed run ${run.id.slice(0,8)}`,
+      content:encodeBase64Utf8(content),branch,...(current?.sha?{sha:current.sha}:{})}});
+  }catch(e){
+    e.remoteCommitUncertain=true;
+    // Even a reported HTTP failure can follow a server-side commit. Keep
+    // the marker and require remote-byte readback or explicit manual review.
+    e.transient=true;throw e;
+  }
 }
 async function googleToken(interactive=false) {
   const client=chrome.runtime.getManifest().oauth2?.client_id||'';
@@ -850,7 +866,18 @@ async function syncPending() {
           if(!activeRun||!activeTask)throw new Error('Aktarım sırasında kayıt bulunamadı.');
           const checkLease=()=>assertLiveSyncLease(run.id,provider,leaseId);
           await checkLease();
-          if(provider==='github')await githubUpload(activeRun,activeTask,checkLease);
+          if(provider==='github')await githubUpload(activeRun,activeTask,checkLease,async()=>{
+            await modifyState(s=>{
+              const current=s.runs.find(r=>r.id===run.id),task=s.tasks.find(t=>t.id===run.taskId);
+              if(!current||!task||current.syncLease?.github?.id!==leaseId||
+                 !(current.syncLease.github.until>Date.now())||
+                 (current.taskRevision||1)!==(task.revision||1)||
+                 current.project!==task.project||current.sourceRepo!==task.repo||
+                 current.syncConsent===false||s.settings.githubEnabled!==true)
+                throw new Error('GitHub PUT niyeti eski lease veya görev revizyonuyla kaydedilemez.');
+              current.githubUncertainCommit=true;
+            });
+          });
           else await driveUpload(activeRun,checkLease);
           // The worker can suspend during a remote POST/PUT. A late successful
           // HTTP response is not authority to mark an expired lease as synced.
@@ -871,6 +898,7 @@ async function syncPending() {
             }
             delete current.syncLease[provider];
             current[statusKey]='synced';current[retryKey]=null;current[`${provider}Error`]='';
+            if(provider==='github')current.githubUncertainCommit=false;
             if(provider==='drive'){
               current.driveUncertainCommit=false;
               current.driveUncertainFolder=null;
@@ -881,6 +909,7 @@ async function syncPending() {
           await modifyState(s=>{const current=s.runs.find(r=>r.id===run.id);
             if(current?.syncLease?.[provider]?.id!==leaseId)return;
             delete current.syncLease[provider];
+            if(provider==='github'&&e.remoteCommitUncertain===true)current.githubUncertainCommit=true;
             if(provider==='drive'){
               if(e.remoteCommitUncertain===true)current.driveUncertainCommit=true;
               if(e.remoteFolderCommitUncertain)current.driveUncertainFolder=e.remoteFolderCommitUncertain;
@@ -973,7 +1002,7 @@ async function safeDiagnostics() {
     vaultStatus(),chrome.alarms.get(SCHEDULER_ALARM),chrome.storage.local.get(REQUIRE_VAULT_KEY)
   ]);
   let summary={taskCount:null,waitingCount:null,retryCount:null,blockedCount:null,liveLeases:null,
-    staleLeases:null,nextDueAt:null,lastSchedulerAt:null,deferredTasks:null,uncertainDriveCommits:null,uncertainDriveFolders:null};
+    staleLeases:null,nextDueAt:null,lastSchedulerAt:null,deferredTasks:null,uncertainGithubCommits:null,uncertainDriveCommits:null,uncertainDriveFolders:null};
   if(vault.sealed&&vault.unlocked){
     const state=await loadState();
     const active=state.runs.filter(r=>r.status==='completed');
@@ -985,6 +1014,7 @@ async function safeDiagnostics() {
       nextDueAt:state.tasks.filter(t=>t.enabled).map(t=>t.nextRunAt).filter(v=>Number.isFinite(v)).sort((a,b)=>a-b)[0]||null,
       lastSchedulerAt:state.schedulerCheckpoint?.lastTickAt||null,
       deferredTasks:state.schedulerCheckpoint?.deferredTasks||0,
+      uncertainGithubCommits:active.filter(r=>r.githubUncertainCommit===true).length,
       uncertainDriveCommits:active.filter(r=>r.driveUncertainCommit===true).length,
       uncertainDriveFolders:active.filter(r=>r.driveUncertainFolder!==null&&!!r.driveUncertainFolder).length};
   }
