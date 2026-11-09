@@ -1,0 +1,25 @@
+'use strict';
+const assert=require('node:assert/strict');
+const {harness}=require('./harness.cjs');
+(async()=>{
+  const h=harness();
+  await h.route('createTask',{payload:{project:'A',name:'Fence',instructions:'Safe synthetic',intervalHours:1,maxRuns:1,enabled:true}});
+  const initial=(await h.route('snapshot')).runs[0];
+  await h.route('completeRun',{id:initial.id,output:'Synthetic response. SONRAKİ TUR ÖZETİ: done.'});
+  let state=h.buckets.local.embasicStateV2;
+  state.settings.driveEnabled=true;
+  state.runs[0].driveSync='pending';
+  const active={id:'original-owner',until:Date.now()+50_000};
+  state.runs[0].syncLease={drive:active};
+  assert.equal(await h.scope.assertLiveSyncLease(initial.id,'drive','original-owner'),true);
+  state.runs[0].syncLease.drive={id:'new-owner',until:Date.now()+50_000};
+  await assert.rejects(h.scope.assertLiveSyncLease(initial.id,'drive','original-owner'),/lease (yetkisi|süresi)/);
+  state.runs[0].syncLease.drive.until=Date.now()-1;
+  await assert.rejects(h.scope.assertLiveSyncLease(initial.id,'drive','new-owner'),/lease (yetkisi|süresi)/);
+  state.runs[0].syncLease.drive.until=Date.now()+50_000;
+  state.runs[0].syncConsent=false;
+  await assert.rejects(h.scope.assertLiveSyncLease(initial.id,'drive','new-owner'),/lease (yetkisi|süresi)/);
+  state.runs[0].syncConsent=true;state.settings.driveEnabled=false;
+  await assert.rejects(h.scope.assertLiveSyncLease(initial.id,'drive','new-owner'),/lease (yetkisi|süresi)/);
+  console.log('PASS TUR006 lease guard: owner replacement, expiry, consent revoke and provider disable fail closed');
+})().catch(e=>{console.error(e);process.exitCode=1});

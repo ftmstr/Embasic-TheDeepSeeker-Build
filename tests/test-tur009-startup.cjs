@@ -1,0 +1,28 @@
+'use strict';
+const assert=require('node:assert/strict');
+const {harness}=require('./harness.cjs');
+const task={project:'Legacy isolated',name:'Never plaintext',instructions:'Synthetic task only',intervalHours:1,maxRuns:1,repo:''};
+(async()=>{
+  const h=harness();
+  const id=await h.route('createTask',{payload:task});
+  assert.equal((await h.route('snapshot')).tasks[0].id,id);
+  assert.equal(h.buckets.local.embasicRequireVaultV4,false,'pre-upgrade baseline simulated');
+  h.alarms.delete('embasic-scheduler');
+  await h.listeners.startup();
+  assert.equal(h.buckets.local.embasicRequireVaultV4,true,'startup must restore mandatory encryption policy');
+  assert.equal(h.alarms.get('embasic-scheduler').periodInMinutes,1);
+  await assert.rejects(h.route('createTask',{payload:task}),/önce şifreli arşiv/);
+  assert.equal((await h.route('snapshot')).tasks.length,1,'legacy data must remain readable for explicit migration');
+  const pass='TUR009 synthetic startup private passphrase';
+  await h.route('vaultCreate',{password:pass});
+  assert.equal((await h.route('snapshot')).tasks.length,1);
+  assert.equal(h.buckets.local.embasicStateV2,undefined,'no plaintext after migration');
+  await h.route('vaultLock');
+  h.alarms.delete('embasic-scheduler');
+  await h.listeners.startup();
+  assert.equal(h.alarms.get('embasic-scheduler').periodInMinutes,1);
+  await assert.rejects(h.route('snapshot'),/KİLİTLİ/);
+  await h.route('vaultUnlock',{password:pass});
+  assert.equal((await h.route('snapshot')).tasks[0].id,id);
+  console.log('PASS TUR009 startup: policy restoration, legacy migration gate, locked restart, alarm recovery');
+})().catch(e=>{console.error(e);process.exitCode=1});

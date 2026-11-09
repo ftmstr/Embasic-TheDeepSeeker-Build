@@ -1,0 +1,24 @@
+'use strict';
+const assert=require('node:assert/strict');
+const {harness}=require('./harness.cjs');
+const task={project:'Project A',name:'Synthetic',instructions:'No secrets',intervalHours:1,maxRuns:2,repo:''};
+(async()=>{
+  const h=harness();h.buckets.local.embasicRequireVaultV4=true;
+  await assert.rejects(h.route('createTask',{payload:task}),/önce şifreli arşiv/);
+  await h.route('vaultCreate',{password:'long offline synthetic passphrase TUR010'});
+  await h.route('createTask',{payload:task});
+  const run=(await h.route('snapshot')).runs[0];
+  await h.route('vaultLock');
+  assert.equal(h.buckets.local.embasicStateV2,undefined);
+  assert.equal(h.buckets.local.embasicStateV1,undefined);
+  await assert.rejects(h.route('snapshot'),/KİLİTLİ/);
+  await assert.rejects(h.route('schedulerNow'),/KİLİTLİ/);
+  h.alarms.delete('embasic-scheduler');
+  await h.listeners.startup();
+  assert.equal(h.alarms.get('embasic-scheduler').periodInMinutes,1);
+  assert.equal((await h.route('vaultStatus')).unlocked,false);
+  assert.equal(h.buckets.local.embasicSealedStateV3?.version,3);
+  await h.route('vaultUnlock',{password:'long offline synthetic passphrase TUR010'});
+  assert.equal((await h.route('snapshot')).runs[0].id,run.id);
+  console.log('PASS TUR010 locked restart: mandatory encryption, no plaintext fallback, alarm rebuild, same pending run');
+})().catch(e=>{console.error(e);process.exitCode=1});

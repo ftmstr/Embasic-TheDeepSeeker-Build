@@ -1,0 +1,15 @@
+# EMBASIC DeepSeek Agent 1.1 — Windows/Chrome PC kabul testi (TUR 002)
+
+**Test durumu:** Henüz gerçek Windows Chrome'da çalıştırılmadı (**NOT_RUN**). Yalnız sentetik veriler ve test deposu kullanın. Gizli soruşturma/kimlik/kurum verisi yüklemeyin.
+
+1. **Kurulum:** ZIP'i sabit bir klasöre açın; kök dizinde `manifest.json` bulunmalı. `chrome://extensions` → Geliştirici modu → Paketlenmemiş öğe yükle. Hata/service-worker kayıt hatası olmamalı. Panelde `v1.1`, tanılamada `1.1.0` görmelisiniz.
+2. **Görev sayısı ve saatlik takvim:** `A/Sadece_A` ve `B/Sadece_B` farklı talimatlarla oluşturun. Her görev için yalnız 1 bekleyen tur oluşmalı; aynı saatte iki farklı görev ilerleyebilir. Chrome kapalıyken alarmı beklemeyin; açınca en fazla bir bekleyen tur oluşmalı. En fazla iki onaylı tur sayacının `2/2` değerinde durduğunu sınayın.
+3. **Bağlam:** A'nın prompt'unda B'nin özetini görmemelisiniz. Bekleyen A turunda `proje`, `talimat` ve `repo` değiştirme denemeleri engellenmeli; B'ye A'nın yanıtı aktarılmamalı. Bekleyen turu atlayıp repo değiştirirseniz eski `SONRAKİ TUR ÖZETİ` yeni talimata taşınmamalı.
+4. **Şifreli yedek:** 12+ karakter şifre girin, `.emback` dışa aktarın. Dosyayı metin editöründe açın: JSON kapsayıcı ve şifreli veri görünüyor olmalı, açık yanıt gözükmemeli. Yanlış parola hata vermeli. Doğru parolayla geri yükleme sonrası tüm görevler duraklatılmış ve aktarım kapalı olmalı. Düz JSON seçimi ayrıca risk uyarısı göstermeli.
+5. **GitHub:** Sadece boş/test repo için fine-grained token bağlayın. Private repo: onaylı rapor yalnız `embasic-agent/<id>` dalına yazılmalı, `main` değişmemeli. Public repo: görev tamamlanırken izin yoksa aktarım bloklanmalı; görev kutusunu sonra açıp yeniden denemek tek başına yeterli olmamalı. Rapora özel düğmeyi onayladıktan sonra *yalnız o tur* aktarılabilmeli.
+6. **Google Drive:** Gerekli Google Cloud/Chrome Extension OAuth ayarını kurduktan sonra sentetik raporu kaydedin. Drive / EMBASIC DeepSeek Agent altında ayrı görev klasörü ve UUID isimli `.md` raporu doğrulayın. Uygulama tekrar denemede aynı kaydı aramalı; ağda yanıt kaybında mutlak tekillik garantisi beklenmemeli.
+7. **Gizli anahtar:** Proje talimatına sentetik `-----BEGIN PRIVATE KEY-----` ifadesini koyarsanız kayıt engellenmeli. GitHub dosyasında gerçek gizli anahtar kullanmayın. Yanıttaki bu işaretleyici ile bulut aktarımı güvenlik için bloke edilmeli.
+8. **API hataları ve eşzamanlılık:** Geçici hata logunda bekleme ve yeniden deneme görülmeli. Kullanıcı, aktarım sürerken görevi silme veya yedek geri yükleme yapamamalı. Hata alanı kişisel verilerden arındırılmalı.
+9. **Kimlik/versiyon:** Eski v1.0 görevleri görünmeli; açık metin eski GitHub token'ı otomatik taşınmamalı. v1.0'dan v1.1'e geçişten önce yedek alın. Mevcut OAuth ayarını yeni ZIP'in varsayılan `manifest.json` dosyasıyla ezdiyseniz Client ID'yi yeniden girin.
+
+**Hata çıktısı:** Chrome → `chrome://extensions` → uzantı → Service Worker / Hatalar, görev paneli → Tanılama; gizli anahtar veya kullanıcı verisi göndermeyin. Chrome extension ID, OAuth Client ID ile birebir uyuşmalı.

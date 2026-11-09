@@ -1,0 +1,26 @@
+'use strict';
+const assert=require('node:assert/strict');
+const {harness}=require('./harness.cjs');
+(async()=>{
+  const h=harness();
+  const token='github_pat_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnop';
+  await h.route('saveGithubToken',{mode:'encrypted',token,password:'A long test only password!'});
+  let status=await h.route('githubTokenStatus');
+  assert.equal(status.connected,true);assert.equal(status.encryptedVault,true);
+  assert.equal(JSON.stringify(h.buckets.local).includes(token),false,'unencrypted token must never be stored locally');
+  const vault=h.buckets.local.embasicGithubVaultV1;assert.equal(vault.version,1);
+  await h.buckets.session.githubSessionToken;
+  delete h.buckets.session.githubSessionToken;
+  status=await h.route('githubTokenStatus');assert.equal(status.connected,false);
+  await assert.rejects(h.route('unlockGithubToken',{password:'wrong-password'}),/yanlış|bozuk/);
+  await h.route('unlockGithubToken',{password:'A long test only password!'});
+  status=await h.route('githubTokenStatus');assert.equal(status.connected,true);
+  const detects=term=>{h.scope.__detectInput=term;return require('node:vm').runInContext('detectSecrets(__detectInput)',h.scope);};
+  assert.equal(detects('-----BEGIN PRIVATE KEY-----'),true);
+  assert.equal(detects(token),true);
+  assert.equal(detects('This is a safe example. TEST_123'),false);
+  await h.route('clearGithubToken');
+  assert.equal(h.buckets.local.embasicGithubVaultV1,undefined);
+  assert.equal(h.buckets.session.githubSessionToken,undefined);
+  console.log('PASS security: AES-256-GCM vault, wrong password denied, no plaintext persistence, secret gate, logout');
+})().catch(e=>{console.error(e);process.exitCode=1});
