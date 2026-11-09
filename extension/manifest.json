@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "EMBASIC DeepSeek Agent - Proje ve Görev Merkezi",
   "short_name": "EMBASIC Agent",
-  "version": "1.14.0",
+  "version": "1.15.0",
   "description": "DeepSeek Free için kontrollü proje, saatlik görev, GitHub ve Google Drive arşiv yöneticisi. Web sohbetini otomatik çalıştırmaz.",
   "minimum_chrome_version": "120",
   "permissions": [

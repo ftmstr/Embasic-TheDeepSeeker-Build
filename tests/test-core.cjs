@@ -4,7 +4,7 @@ const {harness,manifest}=require('./harness.cjs');
 (async()=>{
   const {route,scope,buckets}=harness();
   assert.equal(manifest.manifest_version,3);
-  assert.equal(manifest.version,'1.14.0');
+  assert.equal(manifest.version,'1.15.0');
   assert.deepEqual(manifest.host_permissions.slice().sort(),['https://api.github.com/*','https://www.googleapis.com/*'].sort());
   assert.ok(!manifest.permissions.includes('scripting'));
   assert.ok(!manifest.permissions.includes('cookies'));

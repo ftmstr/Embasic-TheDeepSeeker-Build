@@ -20,4 +20,4 @@ $env:EMBASIC_MV3_WAIT_MS = '15000'
 Write-Host "Gerçek Chrome MV3 testi: $chromeExe (sentetik veri, geçici profil)"
 python tests/test-mv3-extension.py
 if ($LASTEXITCODE -ne 0) { throw "FAIL: Real Chrome MV3 acceptance (exit=$LASTEXITCODE)." }
-Write-Host 'PASS: Real Chrome MV3 acceptance'
+Write-Host 'PASS: Real Chrome MV3 acceptance (including Web Locks availability)'

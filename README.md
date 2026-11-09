@@ -1,3 +1,18 @@
+# EMBASIC TheDeepSeeker v1.15.0 — TUR016
+
+**PC_TEST_CANDIDATE / PRODUCTION_NO_GO.** Resmî GitHub/Drive API'lerine yalnız açıkça onaylanmış rapor aktarımı. DeepSeek Free web sohbetine insansız giriş/DOM okuma/istek gönderimi yoktur.
+
+## TUR016 — gerçek çoklu worker koordinasyonu için yerel Web Locks (sınırlı)
+
+- `navigator.locks.request('embasic-sealed-state-write-v3', {mode:'exclusive'}, ...)` ile aynı **Chrome uzantı origin'i** içinde şifreli durum okuma/yazma ve lease-journal mutasyonları kısa, birbirini dışlayan kritik bölgeye alınır. Eski sadece worker-içi Promise kilidi ve iyimser encrypted-envelope sürüm karşılaştırması yedek koruma olarak kalır. Web Locks API mevcut değilse tanılamada açıkça belirtilir; Web Lock isteği hata verirse sessizce kilitsiz moda düşülmez.
+- **Güvence sınırı:** Web Locks yalnız aynı-origin aktif tarayıcı bağlamlarında kooperatif kodu koordine eder. Chrome farklı profilleri, farklı cihazlar, sağlayıcı COMMIT/ACK, haricî müdahale veya veri depolama geri alması üzerinde **atomik CAS, exactly-once veya donanımsal monotonic anchor** sağlamaz. Gerçek Windows MV3 worker davranışı henüz `NOT_RUN`.
+- Kasa kurtarmasından gelen `recoveryQuarantined` işareti tüm lease-id yazma kapılarında tekrar kontrol edilir; eski run yeni `pending` snapshot yarışından bile uzaktan yazılamaz.
+- Yeni adversarial testler: iki bağımsız MV3-benzeri V8 bağlamında aynı-origin Web Locks altında şifreli kayıt korunması; Web Locks isteği hatasında fail-closed; bağımsız worker ile Drive global root WAL/ACK kaybı; Google OAuth POST 403/429, `Retry-After` ve GET 401; GitHub branch 422/404 ACK belirsizliğinde ikinci POST yok; **eski geçerli ciphertext'in geri alınması hâlâ tespit edilemez** negatif güvenlik testi.
+- 64 eski Node regresyonu + 6 yeni test = **70 Node**; bir paket/manifest kontrolü ve bir simüle Chromium UI ile **72 yerel kontrol**. Gerçek Windows worker/uyku-uyanma, canlı OAuth/Drive/GitHub ve bağımsız cihaz/sağlayıcı testleri `NOT_RUN`.
+- TUR015 Draft PR #4 üzerine ayrı stacked Draft PR, `main` merge veya deploy yok. TUR014 Drive ZIP kaynak kökeni uyuşmazlığı için GitHub HEAD kanonik temel olmaya devam eder.
+
+---
+
 # EMBASIC DeepSeek Agent v1.14.0 — TUR015
 
 **PC_TEST_CANDIDATE / PRODUCTION_NO_GO.** Değişiklikler Google/GitHub API ile onaylı kullanıcı raporlarını arşivlemek içindir; DeepSeek Free web arayüzünde insansız mesaj/DOM otomasyonu eklenmedi.
