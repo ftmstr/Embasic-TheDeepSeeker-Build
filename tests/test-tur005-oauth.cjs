@@ -27,11 +27,11 @@ const reply=(status,data={})=>({ok:status>=200&&status<300,status,
     assert.equal(token,'expired-token');cacheEvictions++;
   };
   const ok=await h.route('googleConnect');
-  assert.equal(ok.folderId,'folder01');
-  assert.equal(authCalls,5,'OAuth initial grant + 401 refresh + POST + readback auth');
+  assert.equal(ok.folderId,null,'OAuth connection is read-only; folder must be created by a leased approved run');
+  assert.equal(authCalls,3,'OAuth initial grant + 401 GET refresh only');
   assert.equal(interactiveCalls,1,'UI-authorized initial consent only');
   assert.equal(cacheEvictions,1);assert.equal(seenOld,1);
-  assert.equal(seenFresh,3);assert.equal(folderPosts,1);
+  assert.equal(seenFresh,1);assert.equal(folderPosts,0);
   assert.ok(!JSON.stringify(h.buckets.local).includes('expired-token'));
   assert.ok(!JSON.stringify(h.buckets.local).includes('fresh-token'));
   const missing=harness({googleOauth:false});

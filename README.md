@@ -1,3 +1,16 @@
+# EMBASIC DeepSeek Agent v1.14.0 — TUR015
+
+**PC_TEST_CANDIDATE / PRODUCTION_NO_GO.** Değişiklikler Google/GitHub API ile onaylı kullanıcı raporlarını arşivlemek içindir; DeepSeek Free web arayüzünde insansız mesaj/DOM otomasyonu eklenmedi.
+
+## TUR015 değişiklikleri
+- Şifreli kasada çoklu worker eski-kopya üzerine yazmayı tespit eden **iyimser sürüm kontrolü ve ciphertext readback**. Chrome storage atomik CAS sağlamaz; eşzamanlı set arasındaki yarış penceresi hâlâ mevcuttur.
+- Bozulmuş kasadan kullanıcı onaylı kurtarma ve JSON içe aktarma sonrası eski turlar `recoveryQuarantined` kalır; **manuel yeniden dene/public onay** ile eski yanıtlar sessizce uzak servise tekrar yazılamaz. Yeni tur kullanıcı tarafından tekrar etkinleştirilerek hazırlanabilir.
+- Google Drive uygulama kök/proje klasörleri için şifreli **global folder intent ledger**; farklı turdan gelen belirsiz POST tekilliği doğrulanmadan yeni POST engellenir. Bozuk ledger girdisi sessizce atılmaz.
+- Google OAuth bağlantısı yalnız yetki ve **salt-okunur** uygulama klasörü araması yapar; klasör oluşturma yalnız lease + kalıcı niyet altında kullanıcı onaylı rapor arşivlemesi sırasında denenir.
+- MV3 gerçek kabul betiğine yapılandırılabilir worker keşif süresi eklendi. Simüle Chromium UI, gerçek MV3 kabulü değildir.
+- TUR014'ün 57 Node regresyonu + 7 yeni adversarial Node test = **64 Node**; paket/manifest ve mock Chromium UI ile toplam **66 yerel kontrol**. Fiziksel Windows Chrome worker, uyku/uyanma ve canlı OAuth/Drive/GitHub kabulü ayrı doğrulanır (**NOT_RUN** aksi hâlde).
+- TUR015 stacked Draft PR, önceki TUR014 HEAD üzerine; `main`e merge veya deploy yok.
+
 # EMBASIC DeepSeek Agent v1.13.0 — TUR014
 
 **Durum: PC_TEST_CANDIDATE / PRODUCTION_NO_GO.** DeepSeek Free web sohbetine otomatik mesaj, DOM kazıma ve izinsiz model erişimi yoktur. Bu proje yalnız kullanıcının inceleyip onayladığı yanıtları arşivler.
