@@ -223,6 +223,8 @@ async function runDiagnostics(){
     `Tanımlı / etkin görev: ${state.tasks.length} / ${state.tasks.filter(x=>x.enabled).length}`,
     `Bekleyen tur: ${state.runs.filter(x=>x.status==='waiting').length}`,
     `Senkronizasyonu takılmış tur: ${state.runs.filter(r=>['retry','blocked'].includes(r.driveSync)||['retry','blocked'].includes(r.githubSync)).length}`,
+    `GitHub belirsiz dal oluşturma: ${worker.uncertainGithubBranches??'KASA KİLİTLİ'}`,
+    `GitHub belirsiz dosya PUT: ${worker.uncertainGithubCommits??'KASA KİLİTLİ'}`,
     `Drive belirsiz dosya oluşturma: ${worker.uncertainDriveCommits??'KASA KİLİTLİ'}`,
     `Drive belirsiz klasör oluşturma: ${worker.uncertainDriveFolders??'KASA KİLİTLİ'}`,
     'DeepSeek sohbet otomasyonu: KAPALI (tasarım gereği)',

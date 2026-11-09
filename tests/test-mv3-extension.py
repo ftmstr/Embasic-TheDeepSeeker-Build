@@ -37,7 +37,7 @@ with sync_playwright() as p, TemporaryDirectory() as directory:
             sys.exit(1 if strict else 0)
         try:
             version=worker.evaluate('() => chrome.runtime.getManifest().version')
-            assert version=='1.12.0',f'Unexpected manifest version: {version}'
+            assert version=='1.13.0',f'Unexpected manifest version: {version}'
             alarm=worker.evaluate('async () => { await new Promise(r => setTimeout(r,250)); return chrome.alarms.get("embasic-scheduler"); }')
             assert alarm and alarm['periodInMinutes']==1,alarm
             extension_id=urlparse(worker.url).netloc

@@ -7,14 +7,21 @@ const miss=()=>({ok:false,status:404,headers:{get:()=>null},text:async()=> 'not 
   let githubPuts=0,drivePosts=0,drivePatches=0;
   let remoteContent=null,driveFile=null;let folderNumber=0;let remoteDriveMetadata=null,remoteDriveContent=null;
   const folders=new Map();const folderParents=new Map();
+  const branches=new Map();const baseSha='a'.repeat(40);
   async function fetch(url,options={}){
     const u=new URL(url);const method=options.method||'GET';
     if(u.hostname==='api.github.com'){
       if(u.pathname==='/repos/test/repo')return ok({default_branch:'main',private:true});
       if(u.pathname.endsWith('/contents/README.md'))return ok({type:'file',content:btoa('Safe README')});
-      if(u.pathname.endsWith('/git/ref/heads/main'))return ok({object:{sha:'base'}});
-      if(u.pathname.includes('/git/ref/heads/embasic-agent/'))return miss();
-      if(u.pathname.endsWith('/git/refs')&&method==='POST')return ok({ref:'created'});
+      if(u.pathname.endsWith('/git/ref/heads/main'))return ok({object:{sha:baseSha}});
+      if(u.pathname.includes('/git/ref/heads/embasic-agent/')){
+        const name=u.pathname.split('/git/ref/heads/')[1];return branches.has(name)?ok({object:{sha:branches.get(name)}}):miss();
+      }
+      if(u.pathname.endsWith('/git/refs')&&method==='POST'){
+        const body=JSON.parse(options.body);const name=body.ref.slice('refs/heads/'.length);
+        if(branches.has(name))return {ok:false,status:422,headers:{get:()=>null},json:async()=>({})};
+        branches.set(name,body.sha);return ok({ref:'created'});
+      }
       if(u.pathname.includes('/agent-reports/')&&method==='GET')return remoteContent?ok({type:'file',content:remoteContent,sha:'stored'}):miss();
       if(u.pathname.includes('/agent-reports/')&&method==='PUT'){
         githubPuts++;remoteContent=JSON.parse(options.body).content;
