@@ -174,11 +174,11 @@ async function exportBackup(encrypted=true){
   if(encrypted){
     const password=$('backupPassword').value;
     const wrapped=await embasicBackupCrypto.encrypt(data,password);
-    downloadJson(wrapped,`embasic-agent-v1.5-${date}.emback`);
+    downloadJson(wrapped,`embasic-agent-v1.15-${date}.emback`);
     notice('AES-256-GCM şifreli yedek kaydedildi. Parolanı güvenli sakla.');
   }else{
     if(!confirm('DÜZ JSON YEDEĞİN İÇİNDE BÜTÜN PROJE TALİMATLARI VE YANITLAR OKUNABİLİR. Gerçekten şifrelemeden kaydetmek istiyor musun?'))return;
-    downloadJson(data,`embasic-agent-v1.5-ACIK-METIN-${date}.json`);
+    downloadJson(data,`embasic-agent-v1.15-ACIK-METIN-${date}.json`);
     notice('ŞİFRELENMEMİŞ JSON yedek kaydedildi; güvenli bir yerde sakla.',true);
   }
 }
@@ -206,6 +206,8 @@ async function runDiagnostics(){
     `Sürüm: ${manifest.version}`,
     `MV3 servis çalışanı: ${worker.alarmRegistered?'YANITLIYOR / alarm mevcut':'ALARM EKSİK'}`,
     `Zamanlayıcı aralığı (dakika): ${worker.alarmPeriodMinutes??'YOK'}`,
+    `Aynı-origin Web Locks kasa yazma serileştirmesi: ${worker.crossContextWebLock?'API mevcut':'API YOK / yalnız iyimser sürüm kontrolü'}`,
+    'Dağıtık atomik CAS / haricî anti-rollback garantisi: YOK',
     `Aktif senkronizasyon lease sayısı: ${worker.liveLeases??'KASA KİLİTLİ'}`,
     `Süresi geçmiş lease sayısı: ${worker.staleLeases??'KASA KİLİTLİ'}`,
     `Son zamanlayıcı checkpoint: ${worker.lastSchedulerAt??'KASA KİLİTLİ / YOK'}`,

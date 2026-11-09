@@ -38,7 +38,12 @@ with sync_playwright() as p, TemporaryDirectory() as directory:
             sys.exit(1 if strict else 0)
         try:
             version=worker.evaluate('() => chrome.runtime.getManifest().version')
-            assert version=='1.14.0',f'Unexpected manifest version: {version}'
+            assert version=='1.15.0',f'Unexpected manifest version: {version}'
+            # Real Chrome worker, not a Web Locks polyfill or DOM mock. Absence
+            # must fail physical acceptance: independent state contexts would
+            # be left with merely advisory optimistic fencing.
+            web_locks=worker.evaluate('() => typeof navigator.locks?.request === "function"')
+            assert web_locks is True,'Chrome MV3 worker Web Locks API unavailable; physical acceptance fails'
             alarm=worker.evaluate('async () => { await new Promise(r => setTimeout(r,250)); return chrome.alarms.get("embasic-scheduler"); }')
             assert alarm and alarm['periodInMinutes']==1,alarm
             extension_id=urlparse(worker.url).netloc

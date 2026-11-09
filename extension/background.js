@@ -1,5 +1,5 @@
 'use strict';
-/* EMBASIC DeepSeek Agent 1.14 — task orchestration + approved result sync.
+/* EMBASIC DeepSeek Agent 1.15 — task orchestration + approved result sync.
  * DeepSeek Chat UI automation/scraping is intentionally NOT implemented.
  * GitHub and Google Drive use their documented, authorised APIs.
  */
@@ -44,7 +44,23 @@ function redactSecrets(value) {
 const errText = err => redactSecrets(err instanceof Error ? err.message : String(err)).slice(0, 350);
 const safeText = (val, limit=200) => String(val ?? '').trim().slice(0, limit);
 const slug = val => String(val).normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Za-z0-9_-]/g,'-').replace(/-+/g,'-').slice(0,60) || 'project';
-function serialize(cb) { const next = stateLock.then(cb,cb); stateLock = next.catch(()=>{}); return next; }
+// TUR016: Web Locks serialize local AES-GCM state transitions across distinct
+// extension contexts in ONE browser origin, when the API is available. Unlike
+// the old in-memory Promise chain, this guards two independent MV3 workers
+// sharing a profile. This lock is NOT distributed to other profiles/devices,
+// and is NOT a provider-side CAS, anti-rollback anchor or remote exactly-once.
+const STATE_WEB_LOCK='embasic-sealed-state-write-v3';
+function webLockAvailable(){return typeof navigator!=='undefined' && typeof navigator.locks?.request==='function';}
+function serialize(cb) {
+  const operation=()=>webLockAvailable()
+    ? navigator.locks.request(STATE_WEB_LOCK,{mode:'exclusive'}, lock=>{
+        if(!lock)throw new Error('Paylaşımlı kasa yazma kilidi alınamadı; işlem iptal.');
+        return cb();
+      })
+    : cb(); // Legacy browser/test harness: optimistic stamp only; NO cross-context CAS guarantee.
+  const next=stateLock.then(operation,operation);
+  stateLock=next.catch(()=>{});return next;
+}
 const validId = id => typeof id === 'string' && /^[a-zA-Z0-9-]{8,72}$/.test(id);
 function normalizeState(raw) {
   const fallback = freshState();
@@ -622,7 +638,7 @@ async function assertLiveSyncLease(runId,provider,leaseId) {
   const run=state.runs.find(r=>r.id===runId);
   const task=state.tasks.find(t=>t.id===run?.taskId);
   const lease=run?.syncLease?.[provider];
-  const permitted=!!run&&!!task&&run.status==='completed'&&run.syncConsent!==false&&
+  const permitted=!!run&&!!task&&run.status==='completed'&&run.syncConsent!==false&&run.recoveryQuarantined!==true&&
     run.project===task.project&&(run.taskRevision||1)===(task.revision||1)&&
     state.settings[`${provider}Enabled`]===true&&
     (provider!=='github'||run.sourceRepo===task.repo);
@@ -978,7 +994,7 @@ async function syncPending() {
             logInState(s,'warning',`${provider}: eski görev revizyonu için otomatik aktarım engellendi (${current.id.slice(0,8)}).`);
             return false;
           }
-          if(!current||!task||current.status!=='completed'||current.syncConsent===false||
+          if(!current||!task||current.status!=='completed'||current.syncConsent===false||current.recoveryQuarantined===true||
              current.project!==task.project||(current.taskRevision||1)!==(task.revision||1)||
              s.settings[`${provider}Enabled`]!==true||
              !['pending','retry'].includes(current[statusKey])||
@@ -1003,7 +1019,7 @@ async function syncPending() {
                  !(current.syncLease.github.until>Date.now())||
                  (current.taskRevision||1)!==(task.revision||1)||
                  current.project!==task.project||current.sourceRepo!==task.repo||
-                 current.syncConsent===false||s.settings.githubEnabled!==true)
+                 current.syncConsent===false||current.recoveryQuarantined===true||s.settings.githubEnabled!==true)
                 throw new Error('GitHub PUT niyeti eski lease veya görev revizyonuyla kaydedilemez.');
               current.githubUncertainCommit=true;
             });
@@ -1011,7 +1027,7 @@ async function syncPending() {
             await modifyState(s=>{
               const current=s.runs.find(r=>r.id===run.id),task=s.tasks.find(t=>t.id===run.taskId);
               if(!current||!task||current.syncLease?.github?.id!==leaseId||
-                 !(current.syncLease.github.until>Date.now())||current.syncConsent===false||
+                 !(current.syncLease.github.until>Date.now())||current.syncConsent===false||current.recoveryQuarantined===true||
                  (current.taskRevision||1)!==(task.revision||1)||
                  current.project!==task.project||current.sourceRepo!==task.repo||
                  s.settings.githubEnabled!==true)
@@ -1023,9 +1039,9 @@ async function syncPending() {
             await modifyState(s=>{
               const current=s.runs.find(r=>r.id===run.id),task=s.tasks.find(t=>t.id===run.taskId);
               if(!current||!task||current.syncLease?.drive?.id!==leaseId||
-                 !(current.syncLease.drive.until>Date.now())||current.syncConsent===false||
+                 !(current.syncLease.drive.until>Date.now())||current.syncConsent===false||current.recoveryQuarantined===true||
                  (current.taskRevision||1)!==(task.revision||1)||
-                 current.project!==task.project||s.settings.driveEnabled!==true)
+                 current.project!==task.project||current.recoveryQuarantined===true||s.settings.driveEnabled!==true)
                 throw new Error('Drive upload niyeti için lease/revizyon geçersiz.');
               current.driveUncertainCommit=true;
             });
@@ -1033,9 +1049,9 @@ async function syncPending() {
             await modifyState(s=>{
               const current=s.runs.find(r=>r.id===run.id),task=s.tasks.find(t=>t.id===run.taskId);
               if(!current||!task||current.syncLease?.drive?.id!==leaseId||
-                 !(current.syncLease.drive.until>Date.now())||current.syncConsent===false||
+                 !(current.syncLease.drive.until>Date.now())||current.syncConsent===false||current.recoveryQuarantined===true||
                  (current.taskRevision||1)!==(task.revision||1)||
-                 current.project!==task.project||s.settings.driveEnabled!==true)
+                 current.project!==task.project||current.recoveryQuarantined===true||s.settings.driveEnabled!==true)
                 throw new Error('Drive klasör niyeti için lease/revizyon geçersiz.');
               const key=folderIntentKey(folder.name,folder.parent);
               const existing=s.driveFolderIntents?.[key];
@@ -1070,7 +1086,7 @@ async function syncPending() {
                !liveTask||current.project!==liveTask.project||
                (current.taskRevision||1)!==(liveTask.revision||1)||
                (provider==='github'&&current.sourceRepo!==liveTask.repo)||
-               current.syncConsent===false||s.settings[`${provider}Enabled`]!==true){
+               current.syncConsent===false||current.recoveryQuarantined===true||s.settings[`${provider}Enabled`]!==true){
               const expired=new Error('Aktarım lease süresi doldu veya izin geri alındı; uzak kayıt yeniden doğrulanmalı.');
               expired.code='LEASE_COMMIT_FENCED';expired.transient=true;
               throw expired;
@@ -1207,7 +1223,7 @@ async function safeDiagnostics() {
       uncertainDriveCommits:active.filter(r=>r.driveUncertainCommit===true).length,
       uncertainDriveFolders:active.filter(r=>r.driveUncertainFolder!==null&&!!r.driveUncertainFolder).length};
   }
-  return {version:chrome.runtime.getManifest().version, vaultSealed:vault.sealed,vaultUnlocked:vault.unlocked,
+  return {version:chrome.runtime.getManifest().version, crossContextWebLock:webLockAvailable(),distributedCas:false, vaultSealed:vault.sealed,vaultUnlocked:vault.unlocked,
     mandatoryVault:local[REQUIRE_VAULT_KEY]===true,alarmRegistered:!!alarm,
     alarmPeriodMinutes:alarm?.periodInMinutes||null,schedulerBusy,syncBusy,
     oauthConfigured:!!chrome.runtime.getManifest().oauth2?.client_id &&
