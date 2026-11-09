@@ -15,6 +15,7 @@ extension=Path(__file__).resolve().parents[1]/'extension'
 chrome_bin=os.environ.get('CHROMIUM_PATH') or ('/usr/bin/chromium' if os.path.exists('/usr/bin/chromium') else None)
 headless=os.environ.get('EMBASIC_HEADLESS','1')!='0'
 strict=os.environ.get('EMBASIC_REQUIRE_MV3','0')=='1'
+worker_wait_ms=max(1000,min(20000,int(os.environ.get('EMBASIC_MV3_WAIT_MS','10000'))))
 
 with sync_playwright() as p, TemporaryDirectory() as directory:
     try:
@@ -29,15 +30,15 @@ with sync_playwright() as p, TemporaryDirectory() as directory:
     try:
         workers=ctx.service_workers
         if not workers:
-            try:workers=[ctx.wait_for_event('serviceworker',timeout=5500)]
+            try:workers=[ctx.wait_for_event('serviceworker',timeout=worker_wait_ms)]
             except PlaywrightTimeout:pass
         worker=next((w for w in workers if w.url.endswith('/background.js') and w.url.startswith('chrome-extension://')),None)
         if worker is None:
-            print(('FAIL' if strict else 'NOT_RUN')+' MV3: no actual unpacked extension worker was exposed (physical Chrome PC required)')
+            print(('FAIL' if strict else 'NOT_RUN')+f' MV3: genuine unpacked extension worker not exposed after {worker_wait_ms}ms (mock tests are not acceptance)')
             sys.exit(1 if strict else 0)
         try:
             version=worker.evaluate('() => chrome.runtime.getManifest().version')
-            assert version=='1.13.0',f'Unexpected manifest version: {version}'
+            assert version=='1.14.0',f'Unexpected manifest version: {version}'
             alarm=worker.evaluate('async () => { await new Promise(r => setTimeout(r,250)); return chrome.alarms.get("embasic-scheduler"); }')
             assert alarm and alarm['periodInMinutes']==1,alarm
             extension_id=urlparse(worker.url).netloc

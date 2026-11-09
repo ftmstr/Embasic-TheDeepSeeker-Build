@@ -204,7 +204,7 @@ async function runDiagnostics(){
   const lines=[
     'EMBASIC DEEPSEEK AGENT — YEREL TANILAMA',
     `Sürüm: ${manifest.version}`,
-    `MV3 servis çalışanı: ${worker.alarmRegistered?'ÇALIŞIYOR / alarm mevcut':'ALARM EKSİK'}`,
+    `MV3 servis çalışanı: ${worker.alarmRegistered?'YANITLIYOR / alarm mevcut':'ALARM EKSİK'}`,
     `Zamanlayıcı aralığı (dakika): ${worker.alarmPeriodMinutes??'YOK'}`,
     `Aktif senkronizasyon lease sayısı: ${worker.liveLeases??'KASA KİLİTLİ'}`,
     `Süresi geçmiş lease sayısı: ${worker.staleLeases??'KASA KİLİTLİ'}`,

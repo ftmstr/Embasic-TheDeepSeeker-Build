@@ -1,5 +1,5 @@
 'use strict';
-/* EMBASIC DeepSeek Agent 1.13 — task orchestration + approved result sync.
+/* EMBASIC DeepSeek Agent 1.14 — task orchestration + approved result sync.
  * DeepSeek Chat UI automation/scraping is intentionally NOT implemented.
  * GitHub and Google Drive use their documented, authorised APIs.
  */
@@ -29,6 +29,7 @@ const SYNC_LEASE_MS = 600_000;
 const freshState = () => ({
   schema: 2, tasks: [], runs: [], logs: [],
   schedulerCheckpoint:{lastTickAt:null,deferredTasks:0},
+  driveFolderIntents:{},
   settings: {driveEnabled: false, githubEnabled: false, desktopNotifications: false},
   createdAt: new Date().toISOString()
 });
@@ -51,9 +52,12 @@ function normalizeState(raw) {
   const settings = raw.settings || {};
   return {
     schema:2, tasks:raw.tasks.map(task=>({ ...task, allowPublicGitHub: task.allowPublicGitHub===true })),
+    // Durable cross-run record for shared Drive root/project folders. Stored INSIDE
+    // the AES-GCM state; a different browser profile cannot trust this ledger.
+    driveFolderIntents:validateDriveFolderLedger(raw.driveFolderIntents),
     runs:raw.runs.map(run=>({ ...run, sourceRepo:run.sourceRepo||'', publicConsentAtCompletion:run.publicConsentAtCompletion===true, publicConsentManual:run.publicConsentManual===true, githubAttempts:run.githubAttempts||0, driveAttempts:run.driveAttempts||0,
       githubRetryAfter:run.githubRetryAfter||null, driveRetryAfter:run.driveRetryAfter||null,
-      syncConsent:run.syncConsent!==false, syncLease:run.syncLease||{},
+      syncConsent:run.syncConsent!==false, recoveryQuarantined:run.recoveryQuarantined===true, syncLease:run.syncLease||{},
       githubUncertainCommit:run.githubUncertainCommit===true,
       githubUncertainBranch:(run.githubUncertainBranch &&
         typeof run.githubUncertainBranch.repo==='string' &&
@@ -74,6 +78,24 @@ function normalizeState(raw) {
     } : {lastTickAt:null,deferredTasks:0},
     createdAt:raw.createdAt||nowIso()
   };
+}
+// Never silently drop a malformed authenticated write-ahead marker: doing so
+// could turn an unknown Drive POST ACK into a duplicate POST on the next tick.
+function validateDriveFolderLedger(raw){
+  if(raw===undefined)return {};
+  if(!raw||typeof raw!=='object'||Array.isArray(raw))
+    throw new Error('Şifreli Drive klasör journal şeması bozuk; gönderim durduruldu.');
+  const entries=Object.entries(raw);
+  if(entries.length>500)throw new Error('Drive journal kapasitesi aşıldı; gönderim durduruldu.');
+  for(const [key,x] of entries){
+    if(key.length>450 || !x || typeof x!=='object' ||
+      typeof x.name!=='string'||x.name.length>250 ||
+      typeof x.parent!=='string'||x.parent.length>160 ||
+      !validId(x.runId||'') || typeof x.leaseId!=='string' || !x.leaseId ||
+      x.leaseId.length>120 || key!==JSON.stringify([x.parent,x.name]))
+      throw new Error('Drive journal kimlik eşleşmesi bozuk; gönderim durduruldu.');
+  }
+  return Object.fromEntries(entries);
 }
 // Locking is fail-closed: only ciphertext is read when a sealed envelope exists.
 // The derived 256-bit key is held in chrome.storage.session (never local/sync).
@@ -193,6 +215,7 @@ async function restoreLastGoodVault(password,confirmation){
     for(const task of state.tasks)task.enabled=false;
     for(const run of state.runs){
       run.syncConsent=false;
+      run.recoveryQuarantined=true;
       run.publicConsentManual=false;
       run.publicConsentAtCompletion=false;
       run.syncLease={};
@@ -202,6 +225,7 @@ async function restoreLastGoodVault(password,confirmation){
         run.driveError='Kasa kurtarıldı: uzak geçmiş doğrulanmadan yeniden aktarım yasak.';
       }
     }
+    state.driveFolderIntents={}; // rollback destroys journal history: prohibit replay of ALL restored runs.
     state.schedulerCheckpoint={lastTickAt:null,deferredTasks:0};
     logInState(state,'warning','Kasa geri alındı: görevler duraklatıldı ve bulut aktarımı kullanıcı incelemesine alındı.');
     // Re-encrypt the quarantined state BEFORE allowing session access. Reusing
@@ -232,11 +256,21 @@ async function loadState() {
   }
   return freshState();
 }
-async function saveState(state) {
+// Advisory optimistic conflict detection for distinct worker contexts in one
+// Chrome storage profile. Reads/writes are NOT atomic CAS; races can still occur
+// between the final comparison and chrome.storage.local.set. Never claim this
+// is a distributed mutex, hardware anti-rollback or provider exactly-once.
+const envelopeStamp = sealed => sealed ? JSON.stringify([sealed.version,sealed.salt,sealed.iv,sealed.data]) : null;
+function staleLocalWriter(){
+  const error=new Error('Şifreli arşiv başka çalışan tarafından değiştirildi; eski işlem kaydı yazılamaz.');
+  error.code='STALE_LOCAL_WRITER';return error;
+}
+async function saveState(state,expectedStamp=undefined) {
   await assertVaultReady();
   const bytes=ENCODER.encode(JSON.stringify(state)).length;
   if(bytes>MAX_STATE_BYTES)throw new Error('Yerel arşiv 32 MB sınırına ulaştı; geçmişi güvenli biçimde yedekle.');
   const sealed=(await chrome.storage.local.get(SEALED_KEY))[SEALED_KEY];
+  if(expectedStamp!==undefined && envelopeStamp(sealed)!==expectedStamp)throw staleLocalWriter();
   if(sealed) {
     const key=await unlockedStateKey();
     const {salt}=checkEnvelope(sealed);
@@ -244,10 +278,21 @@ async function saveState(state) {
     // Do not silently recover/rollback; recovery is only available via an explicit action.
     const next=await encryptEnvelope(state,key,salt,sealed.iterations);
     await chrome.storage.local.set({[RECOVERY_KEY]:sealed});
+    if(expectedStamp!==undefined && envelopeStamp((await chrome.storage.local.get(SEALED_KEY))[SEALED_KEY])!==expectedStamp)
+      throw staleLocalWriter();
     await chrome.storage.local.set({[SEALED_KEY]:next});
+    // A concurrent writer may clobber this ciphertext after a successful set.
+    if(envelopeStamp((await chrome.storage.local.get(SEALED_KEY))[SEALED_KEY])!==envelopeStamp(next))
+      throw staleLocalWriter();
   }else await chrome.storage.local.set({[STATE_KEY]:state});
 }
-function modifyState(fn) { return serialize(async()=>{const state=await loadState(); const result=await fn(state); await saveState(state); return result;}); }
+function modifyState(fn) { return serialize(async()=>{
+  const initial=(await chrome.storage.local.get(SEALED_KEY))[SEALED_KEY];
+  const state=initial ? await decryptEnvelope(initial,await unlockedStateKey()) : await loadState();
+  const result=await fn(state);
+  await saveState(state,envelopeStamp(initial));
+  return result;
+}); }
 const logInState=(state,level,message)=>{state.logs.unshift({id:crypto.randomUUID(),level,time:nowIso(),message:redactSecrets(safeText(message,400))}); state.logs=state.logs.slice(0,200);};
 const logEvent=(level,msg)=>modifyState(s=>logInState(s,level,msg));
 function encodeBase64Utf8(text) {
@@ -742,7 +787,18 @@ async function findDriveFolder(name,parent=null) {
   return matches[0]?.id||null;
 }
 const driveFolderFlights=new Map();
-async function ensureDriveFolder(name,parent=null,checkLease=async()=>true,uncertainFolder=null,persistFolderIntent=async()=>{}) {
+const folderIntentKey=(name,parent)=>JSON.stringify([parent||'root',name]);
+async function assertNoForeignFolderIntent(name,parent,runId,leaseId){
+  const state=await loadState();
+  const marker=state.driveFolderIntents?.[folderIntentKey(name,parent)];
+  if(marker && (marker.runId!==runId || marker.leaseId!==leaseId)){
+    const error=new Error('Başka bir turun Drive klasör oluşturması belirsiz; küresel kayıt çözülmeden POST engellendi.');
+    error.code='DRIVE_SHARED_FOLDER_UNCERTAIN';error.transient=true;
+    throw error;
+  }
+}
+
+async function ensureDriveFolder(name,parent=null,checkLease=async()=>true,uncertainFolder=null,persistFolderIntent=async()=>{},settleFolderIntent=async()=>{}) {
   // Coalesce concurrent attempts in the same worker; avoid avoidable duplicate
   // Google Drive folder creation on a lost response by reading back metadata.
   await checkLease();
@@ -753,7 +809,7 @@ async function ensureDriveFolder(name,parent=null,checkLease=async()=>true,uncer
     return reused;
   }
   const job=(async()=>{
-    const found=await findDriveFolder(name,parent);if(found)return found;
+    const found=await findDriveFolder(name,parent);if(found){await settleFolderIntent({name,parent:parent||'root',id:found});return found;}
     // A prior POST may have committed without an ACK while Drive search is
     // eventually consistent. Never create a second folder until reconciled.
     if(uncertainFolder?.name===name&&uncertainFolder?.parent===(parent||'root')){
@@ -781,13 +837,14 @@ async function ensureDriveFolder(name,parent=null,checkLease=async()=>true,uncer
         const error=new Error('Drive klasör makbuzu henüz uzaktan doğrulanamadı.');
         error.transient=true;throw error;
       }
+      await settleFolderIntent({name,parent:parent||'root',id:file.id});
       return file.id;
     }catch(error){
       if(!transientSyncError(errText(error))&&!error.transient)throw error;
       // If server committed but ACK was lost, only a SINGLE app-owned match may
       // be reused. Ambiguity or a second outage must fail closed.
       const recovered=await findDriveFolder(name,parent);
-      if(recovered)return recovered;
+      if(recovered){await settleFolderIntent({name,parent:parent||'root',id:recovered});return recovered;}
       // Persist a scoped uncertainty marker on this run. A subsequent alarm
       // must not replay a potentially committed folder POST on a stale list.
       error.remoteFolderCommitUncertain={name,parent:parent||'root'};
@@ -807,15 +864,15 @@ async function sha256Hex(content){
   const hash=new Uint8Array(await crypto.subtle.digest('SHA-256',ENCODER.encode(content)));
   return Array.from(hash,b=>b.toString(16).padStart(2,'0')).join('');
 }
-async function driveUpload(run,checkLease=async()=>true,persistUploadIntent=async()=>{},persistFolderIntent=async()=>{}) {
+async function driveUpload(run,checkLease=async()=>true,persistUploadIntent=async()=>{},persistFolderIntent=async()=>{},settleFolderIntent=async()=>{}) {
   if(!validId(run.taskId)||!validId(run.id))throw new Error('Drive arşiv kimliği geçersiz.');
   const content=reportText(run);
   if(detectSecrets(content))throw new Error('Raporda gizli anahtara benzeyen içerik tespit edildi; Drive aktarımı engellendi.');
   const digest=await sha256Hex(content);
   await checkLease();
-  const root=await ensureDriveFolder('EMBASIC DeepSeek Agent',null,checkLease,run.driveUncertainFolder,persistFolderIntent);
+  const root=await ensureDriveFolder('EMBASIC DeepSeek Agent',null,checkLease,run.driveUncertainFolder,persistFolderIntent,settleFolderIntent);
   const projectName=`${safeText(run.project,75)} [${run.taskId.slice(0,12)}]`;
-  const project=await ensureDriveFolder(projectName,root,checkLease,run.driveUncertainFolder,persistFolderIntent);
+  const project=await ensureDriveFolder(projectName,root,checkLease,run.driveUncertainFolder,persistFolderIntent,settleFolderIntent);
   const name=`${run.id}.md`;
   const query=`name = '${driveEscape(name)}' and '${project}' in parents and trashed = false`+
     ` and appProperties has { key = 'embasicRun' and value = '${run.id}' }`;
@@ -902,7 +959,7 @@ async function syncPending() {
     const state=await loadState();let processed=0;
     for(const run of state.runs) {
       if(processed>=MAX_SYNC_PER_TICK)break;
-      if(run.status!=='completed'||run.syncConsent===false)continue;
+      if(run.status!=='completed'||run.syncConsent===false||run.recoveryQuarantined===true)continue;
       for(const provider of ['github','drive']) {
         if(processed>=MAX_SYNC_PER_TICK)break;
         const statusKey=`${provider}Sync`,attemptKey=`${provider}Attempts`,retryKey=`${provider}RetryAfter`;
@@ -980,7 +1037,25 @@ async function syncPending() {
                  (current.taskRevision||1)!==(task.revision||1)||
                  current.project!==task.project||s.settings.driveEnabled!==true)
                 throw new Error('Drive klasör niyeti için lease/revizyon geçersiz.');
+              const key=folderIntentKey(folder.name,folder.parent);
+              const existing=s.driveFolderIntents?.[key];
+              if(existing && (existing.runId!==run.id || existing.leaseId!==leaseId))
+                throw new Error('Drive küresel klasör niyeti başka turda açık; POST fail-closed.');
+              s.driveFolderIntents??={};
+              s.driveFolderIntents[key]={...folder,runId:run.id,leaseId};
               current.driveUncertainFolder=folder;
+            });
+          },async folder=>{
+            await modifyState(s=>{
+              const key=folderIntentKey(folder.name,folder.parent);
+              const marker=s.driveFolderIntents?.[key];
+              // Never clear a marker that another writer has created.
+              if(marker && marker.runId===run.id && marker.leaseId===leaseId)
+                delete s.driveFolderIntents[key];
+              const current=s.runs.find(r=>r.id===run.id);
+              if(current?.driveUncertainFolder?.name===folder.name &&
+                 current.driveUncertainFolder.parent===folder.parent)
+                current.driveUncertainFolder=null;
             });
           });
           // The worker can suspend during a remote POST/PUT. A late successful
@@ -1048,6 +1123,7 @@ async function approvePublicRun(runId) {
     const task=s.tasks.find(t=>t.id===run.taskId);
     if(!task?.repo||run.sourceRepo!==task.repo)throw new Error('Turun kaynak deposu değişti; public onay verilemez.');
     if(run.githubSync==='synced')return true;
+    if(run.recoveryQuarantined===true)throw new Error('Kurtarılmış eski tur için public aktarım onayı yeniden verilemez. Yeni tur oluştur.');
     run.publicConsentManual=true;
     logInState(s,'warning',`${run.taskName}: bu tura özel HERKESE AÇIK GitHub aktarımı açıkça onaylandı.`);
     return true;
@@ -1059,6 +1135,7 @@ async function manualRetrySync(runId=null) {
     for(const run of s.runs) {
       if(runId&&run.id!==runId)continue;
       if(run.status!=='completed')continue;
+      if(run.recoveryQuarantined===true)throw new Error('Kasa kurtarma veya eski yedekten gelen tur yeniden yayımlanamaz; yeni tur oluştur.');
       run.syncConsent=true;
       const task=s.tasks.find(t=>t.id===run.taskId);
       // A manual retry must NOT steal a live persisted lease from a suspended
@@ -1101,7 +1178,7 @@ function validateImport(payload) {
       taskRevision:task.revision||1,publicConsentAtCompletion:false,publicConsentManual:false,
       output:safeText(r.output,MAX_OUTPUT),status:r.status,
       scheduledAt:safeText(r.scheduledAt,40),completedAt:safeText(r.completedAt,40),
-      githubSync:'disabled',driveSync:'disabled',syncConsent:false,
+      githubSync:'disabled',driveSync:'disabled',syncConsent:false,recoveryQuarantined:true,
       githubAttempts:0,driveAttempts:0,githubRetryAfter:null,driveRetryAfter:null});
   }
   const restored=freshState();restored.tasks=tasks;restored.runs=runs;
@@ -1178,7 +1255,12 @@ async function route(message) {
     }
     case 'googleConnect': {
       await assertVaultReady();
-      await googleToken(true);return {folderId:await ensureDriveFolder('EMBASIC DeepSeek Agent')};
+      await googleToken(true);
+      // Connection is authorization, not permission to mutate a remote folder.
+      // Previously this route created a root folder without a run-specific
+      // encrypted journal; actual folder creation now happens inside a leased
+      // approved upload only.
+      return {folderId:await findDriveFolder('EMBASIC DeepSeek Agent')};
     }
     case 'googleStatus': {
       try{await googleToken(false);return {connected:true};}

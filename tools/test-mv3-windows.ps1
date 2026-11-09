@@ -16,6 +16,7 @@ if (-not $chromeExe) { throw 'Google Chrome exe bulunamadı. CHROMIUM_PATH ortam
 $env:CHROMIUM_PATH = $chromeExe
 $env:EMBASIC_HEADLESS = '0'
 $env:EMBASIC_REQUIRE_MV3 = '1'
+$env:EMBASIC_MV3_WAIT_MS = '15000'
 Write-Host "Gerçek Chrome MV3 testi: $chromeExe (sentetik veri, geçici profil)"
 python tests/test-mv3-extension.py
 if ($LASTEXITCODE -ne 0) { throw "FAIL: Real Chrome MV3 acceptance (exit=$LASTEXITCODE)." }

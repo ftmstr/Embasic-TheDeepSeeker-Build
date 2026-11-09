@@ -1,0 +1,22 @@
+'use strict';
+const assert=require('node:assert/strict');
+const {harness}=require('./harness.cjs');
+(async()=>{
+ const h=harness();delete h.buckets.local.embasicRequireVaultV4;
+ await h.listeners.startup();
+ const password='tur015-restart-shared-synthetic-vault';
+ await h.route('vaultCreate',{password});
+ await h.route('createTask',{payload:{project:'Restart only',name:'Alarm',instructions:'No network calls',intervalHours:1,maxRuns:1}});
+ const before=(await h.route('snapshot')).runs.length;
+ h.alarms.delete('embasic-scheduler');
+ await h.listeners.startup();
+ assert.equal(h.alarms.get('embasic-scheduler').periodInMinutes,1);
+ assert.equal((await h.route('snapshot')).runs.length,before,'startup must not duplicate waiting runs');
+ await h.route('vaultLock');
+ const d=await h.route('diagnostics');
+ assert.equal(d.taskCount,null);assert.equal(d.uncertainGithubBranches,null);
+ assert.equal(d.deepseekWebAutomation,false);
+ await h.listeners.startup();assert.equal(h.alarms.get('embasic-scheduler').periodInMinutes,1);
+ assert.equal(h.buckets.session.embasicStateKeyV3,undefined);
+ console.log('PASS TUR015 offline MV3 startup mock: reinstalls 1-minute alarm, does not duplicate runs, hides locked state (NOT real Chrome)');
+})().catch(e=>{console.error(e);process.exitCode=1});
