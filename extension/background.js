@@ -1,5 +1,5 @@
 'use strict';
-/* EMBASIC DeepSeek Agent 1.15 — task orchestration + approved result sync.
+/* EMBASIC DeepSeek Agent 1.16 — task orchestration + approved result sync.
  * DeepSeek Chat UI automation/scraping is intentionally NOT implemented.
  * GitHub and Google Drive use their documented, authorised APIs.
  */
@@ -1303,7 +1303,14 @@ async function route(message) {
       await assertVaultReady();
       if(syncBusy||schedulerBusy)throw new Error('Aktif görev veya senkronizasyon sırasında yedek geri yüklenemez.');
       const restored=validateImport(message.payload);
-      await serialize(()=>saveState(restored));updateBadge(restored);return {tasks:restored.tasks.length,runs:restored.runs.length};
+      // TUR017: a restored backup MUST participate in the same optimistic
+      // sealed-envelope compare-and-write as other changes. saveState(restored)
+      // with no expected stamp could clobber a concurrent worker/profile edit.
+      await modifyState(s=>{
+        for(const key of Object.keys(s))delete s[key];
+        Object.assign(s,restored);
+      });
+      updateBadge(restored);return {tasks:restored.tasks.length,runs:restored.runs.length};
     }
     case 'schedulerNow':await runScheduler();return true;
     default:throw new Error('Bilinmeyen işlem.');

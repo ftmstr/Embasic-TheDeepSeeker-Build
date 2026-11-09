@@ -3,7 +3,7 @@ from html.parser import HTMLParser
 root=pathlib.Path(__file__).resolve().parent.parent/'extension'
 manifest=json.loads((root/'manifest.json').read_text())
 assert manifest['manifest_version']==3
-assert manifest['version']=='1.15.0'
+assert manifest['version']=='1.16.0'
 assert not any(x in manifest['permissions'] for x in ('scripting','cookies','webRequest','debugger'))
 assert all(x in ('https://api.github.com/*','https://www.googleapis.com/*') for x in manifest['host_permissions'])
 for path in ('background.js','dashboard.html','dashboard.js','backup-crypto.js','styles.css','popup.html','popup.js'):
@@ -24,6 +24,10 @@ for prefix in ('dashboard','popup'):
     assert not missing, (prefix,missing)
 assert (root.parent/'tools/test-mv3-windows.ps1').is_file()
 assert 'EMBASIC_REQUIRE_MV3' in (root.parent/'tools/test-mv3-windows.ps1').read_text()
+assert (root/'remote-claim.js').is_file()
+assert (root/'rollback-witness.js').is_file()
+assert 'CLAIM_UNCERTAIN_NO_REPLAY' in (root/'remote-claim.js').read_text()
+assert 'WITNESS_SIGNATURE_INVALID' in (root/'rollback-witness.js').read_text()
 assert 'navigator.locks.request' in (root/'background.js').read_text()
 assert 'deepseekWebAutomation:false' in (root/'background.js').read_text()
 print('PASS — HTML UI IDs, extension icons, manifest, MV3 Windows acceptance tool and required assets.')

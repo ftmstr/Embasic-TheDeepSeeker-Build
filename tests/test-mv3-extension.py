@@ -38,7 +38,7 @@ with sync_playwright() as p, TemporaryDirectory() as directory:
             sys.exit(1 if strict else 0)
         try:
             version=worker.evaluate('() => chrome.runtime.getManifest().version')
-            assert version=='1.15.0',f'Unexpected manifest version: {version}'
+            assert version=='1.16.0',f'Unexpected manifest version: {version}'
             # Real Chrome worker, not a Web Locks polyfill or DOM mock. Absence
             # must fail physical acceptance: independent state contexts would
             # be left with merely advisory optimistic fencing.
@@ -93,6 +93,26 @@ with sync_playwright() as p, TemporaryDirectory() as directory:
             assert diag['data']['uncertainDriveCommits']==0,diag
             assert diag['data']['uncertainDriveFolders']==0,diag
             assert diag['data']['lastSchedulerAt'],diag
+            # TUR017: a REAL extension-origin contention probe (not a mock).
+            # Two independent extension pages must serialize the same lock.
+            # Keep this probe separate from the application's vault-write lock.
+            other=ctx.new_page()
+            other.goto(f'chrome-extension://{extension_id}/dashboard.html',wait_until='domcontentloaded',timeout=10000)
+            first=page.evaluate("""() => {window.__held=false;window.__unlock=null;
+              navigator.locks.request('embasic-tur017-real-acceptance-probe',{mode:'exclusive'},async lock=>{
+                if(!lock)throw Error('No real Web Lock');window.__held=true;
+                await new Promise(resolve=>window.__unlock=resolve);
+              });return true;}""")
+            page.wait_for_function('window.__held === true',timeout=5000)
+            other.evaluate("""() => {window.__otherHeld=false;
+              navigator.locks.request('embasic-tur017-real-acceptance-probe',{mode:'exclusive'},async lock=>{
+                if(!lock)throw Error('No second Web Lock');window.__otherHeld=true;
+              });return true;}""")
+            other.wait_for_timeout(250)
+            assert other.evaluate('window.__otherHeld') is False,'Two independent same-origin pages held exclusive Web Lock simultaneously'
+            page.evaluate('window.__unlock()')
+            other.wait_for_function('window.__otherHeld === true',timeout=5000)
+            other.close()
             # Genuine browser restart using the SAME persistent profile: session
             # encryption key must disappear; ciphertext and pending tur survive.
             page.close()

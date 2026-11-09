@@ -1,3 +1,18 @@
+# EMBASIC TheDeepSeeker v1.16.0 — TUR017
+
+**PC_TEST_CANDIDATE / PRODUCTION_NO_GO.** Kanonik Public GitHub `ftmstr/Embasic-TheDeepSeeker-Build` TUR016 Draft PR #5 (`ca6e95e80b9f1de4659e0cdcffb48d71a04c4e14`) üzerine ayrı stacked tur. `main` merge/deploy yok. DeepSeek Free insansız web sohbet otomasyonu yok.
+
+## TUR017: dağıtık sahiplik ve imzalı tanık fizibilitesi
+
+- `extension/remote-claim.js`: GitHub `POST /git/refs` benzersiz branch-ref oluşturma kuralını modelleyen, bağımsız iki istemci arasında tek kazananlı **claim prototipi**. Owner nonce + run ID + SHA-256 + Git commit mesajı tam eşleşir; encrypted write-ahead intent'den önce uzak mutation yapılmaz; kayıp ACK/409/422/429/404 için *bir daha POST yapmayan* okuma uzlaştırması. Gerçek sunucu üzerinde bu protokolün uçtan uca testi **NOT_RUN**.
+- `extension/rollback-witness.js`: ayrı güvenilir monotonic sunucuya ihtiyaç duyan **P-256 ECDSA signed witness** salt-okunur prototipi. Geçerli eski AES-GCM ciphertext'in en son sürüm olmadığını tespit etmeyi modelliyor; bağımsız sunucu, tazelik kanıtı ve secret key altyapısı **henüz yok**. İki deneysel modül **üretim `background.js` uzak aktarımına bağlı değildir**, dolayısıyla dağıtık CAS veya anti-rollback sağlanmış sayılmaz.
+- **Gerçek kod düzeltmesi**: şifreli JSON `restoreBackup` işlemi artık `modifyState` üzerinden eski ciphertext'i başka worker verisi üzerine yazmadan, beklenen envelope stamp kontrolüyle tamamlar.
+- Windows Chrome MV3 acceptance koduna iki gerçek extension-origin sayfası Web Locks yarış probu eklendi. Çalıştırılmadıysa `NOT_RUN`.
+- Eski 70 Node + 7 yeni adversarial Node, 1 paket/manifest ve 1 Chromium UI mock = **79 hedef yerel grup**. Gerçek Windows MV3, canlı GitHub/Google API'leri, farklı cihaz ve sunucu-tanık testleri ayrı `NOT_RUN`.
+- Teknik rapor: `docs/TUR017_REPORT.md`; ayrıntılı güvenlik sözleşmesi: `docs/TUR017_REMOTE_CAS_SECURITY.md`; Windows kılavuzu: `docs/PC_KABUL_TESTI_TUR017.md`.
+
+---
+
 # EMBASIC TheDeepSeeker v1.15.0 — TUR016
 
 **PC_TEST_CANDIDATE / PRODUCTION_NO_GO.** Resmî GitHub/Drive API'lerine yalnız açıkça onaylanmış rapor aktarımı. DeepSeek Free web sohbetine insansız giriş/DOM okuma/istek gönderimi yoktur.

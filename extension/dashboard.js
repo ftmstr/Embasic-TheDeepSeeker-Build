@@ -174,11 +174,11 @@ async function exportBackup(encrypted=true){
   if(encrypted){
     const password=$('backupPassword').value;
     const wrapped=await embasicBackupCrypto.encrypt(data,password);
-    downloadJson(wrapped,`embasic-agent-v1.15-${date}.emback`);
+    downloadJson(wrapped,`embasic-agent-v1.16-${date}.emback`);
     notice('AES-256-GCM şifreli yedek kaydedildi. Parolanı güvenli sakla.');
   }else{
     if(!confirm('DÜZ JSON YEDEĞİN İÇİNDE BÜTÜN PROJE TALİMATLARI VE YANITLAR OKUNABİLİR. Gerçekten şifrelemeden kaydetmek istiyor musun?'))return;
-    downloadJson(data,`embasic-agent-v1.15-ACIK-METIN-${date}.json`);
+    downloadJson(data,`embasic-agent-v1.16-ACIK-METIN-${date}.json`);
     notice('ŞİFRELENMEMİŞ JSON yedek kaydedildi; güvenli bir yerde sakla.',true);
   }
 }
