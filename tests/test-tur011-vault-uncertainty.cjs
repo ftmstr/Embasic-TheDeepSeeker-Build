@@ -1,0 +1,31 @@
+'use strict';
+const assert=require('node:assert/strict');
+const {harness}=require('./harness.cjs');
+(async()=>{
+  const h=harness({googleOauth:true});
+  delete h.buckets.local.embasicRequireVaultV4;
+  await h.route('vaultCreate',{password:'strong long offline passphrase only in synthetic test'});
+  await h.route('createTask',{payload:{project:'Vault Project',name:'Encrypted uncertainty',instructions:'Synthetic only.',intervalHours:1,maxRuns:1,repo:''}});
+  let s=await h.route('snapshot');const id=s.runs[0].id;
+  await h.route('completeRun',{id,output:'Synthetic proof. SONRAKİ TUR ÖZETİ: sealed.'});
+  await h.route('saveSettings',{driveEnabled:true,githubEnabled:false});
+  h.scope.ensureDriveFolder=async(_n,p)=>p?'project-id':'root-id';
+  h.scope.driveRequest=async(path)=>{
+    if(path.startsWith('/drive/v3/files?'))return {files:[]};
+    if(path.startsWith('/upload/drive/v3/files?'))throw Error('network lost after server commit');
+    throw Error('unexpected request '+path);
+  };
+  await h.route('syncNow',{id});
+  s=await h.route('snapshot');assert.equal(s.runs[0].driveUncertainCommit,true);
+  const persistent=JSON.stringify(h.buckets.local);
+  assert.ok(!persistent.includes('Vault Project'));
+  assert.ok(!persistent.includes('network lost after server commit'));
+  await h.route('vaultLock');
+  const locked=await h.route('diagnostics');
+  assert.equal(locked.uncertainDriveCommits,null,'locked diagnostics cannot disclose task state');
+  await h.route('vaultUnlock',{password:'strong long offline passphrase only in synthetic test'});
+  s=await h.route('snapshot');assert.equal(s.runs[0].driveUncertainCommit,true);
+  const open=await h.route('diagnostics');
+  assert.equal(open.uncertainDriveCommits,1);
+  console.log('PASS TUR011 encrypted uncertainty: durable marker survives lock/restart, locked diagnostics reveal no task contents');
+})().catch(e=>{console.error(e);process.exitCode=1});

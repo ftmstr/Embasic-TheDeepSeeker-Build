@@ -1,0 +1,61 @@
+name: Source verification (no live accounts)
+on:
+  push:
+    branches: ["main", "bootstrap/**", "develop/**", "tur/**"]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  node-regression:
+    name: Node regressions and manifest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run every Node test
+        run: |
+          set -euo pipefail
+          count=$(find tests -maxdepth 1 -name 'test-*.cjs' | wc -l)
+          test "$count" -eq 46
+          for file in tests/test-*.cjs; do node "$file"; done
+      - name: Structural Chrome extension tests
+        run: python tests/test-package.py
+  simulated-chromium-ui:
+    name: Mocked Chromium UI only (not real MV3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install playwright
+      - run: python -m playwright install --with-deps chromium
+      - name: Run mocked UI smoke test
+        run: |
+          CHROMIUM_PATH="$(python -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()')"
+          export CHROMIUM_PATH
+          python tests/test-ui-smoke.py
+  windows-structural:
+    name: Windows Node and manifest (no physical MV3)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run Node regressions
+        shell: pwsh
+        run: |
+          $tests = @(Get-ChildItem tests/test-*.cjs)
+          if ($tests.Count -ne 46) { throw "Expected 46 Node tests, got $($tests.Count)" }
+          foreach ($test in $tests) { node $test.FullName; if ($LASTEXITCODE -ne 0) { throw "FAIL: $($test.Name)" } }
+      - run: python tests/test-package.py

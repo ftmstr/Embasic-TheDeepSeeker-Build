@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>EMBASIC DeepSeek Agent</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="backup-crypto.js" defer></script>
+  <script src="dashboard.js" defer></script>
+</head>
+<body>
+  <div id="vaultLockScreen" class="vault-lock-screen" hidden role="alert" aria-live="polite">
+    <div class="vault-lock-panel"><h2>🔒 EMBASIC arşivi kilitli</h2><p>Görev ve rapor içerikleri gizlendi. Üstteki parola alanı ile kilidi aç; kilit açılmadan otomatik görev ve bulut aktarımı yapılmaz.</p><label>Arşiv parolası<input id="vaultOverlayPassword" type="password" autocomplete="current-password" placeholder="Arşiv parolası"></label><button id="vaultOverlayUnlock" class="primary">Kasayı aç</button><button id="vaultOverlayRecover" class="secondary" hidden>Son sağlam şifreli kopyadan kurtar</button><p id="vaultLockError" role="status"></p></div>
+  </div>
+  <div class="shell">
+    <header class="topbar">
+      <div class="logo">E<span>•</span></div>
+      <div>
+        <div class="eyebrow">EMBASIC STUDIOS</div>
+        <h1>DeepSeek Agent <small>v1.5 TUR006</small></h1>
+        <p class="subtext">Ücretsiz web hesabı • Görev merkezi • GitHub + Drive</p>
+      </div>
+      <div class="header-actions">
+        <label class="backup-pass">Yedek şifresi (en az 12 karakter)<input id="backupPassword" type="password" minlength="12" autocomplete="new-password" placeholder="Yedek şifresi"></label>
+        <button id="exportBackup" class="secondary">↓ Şifreli yedek</button>
+        <button id="exportPlainBackup" class="ghost" title="Şifrelenmemiş JSON yalnızca bilinçli tercihle">Düz JSON (riskli)</button>
+        <button id="importBackup" class="secondary">↑ Yedeği geri yükle</button>
+        <input id="importFile" type="file" accept=".json,.emback,application/json" hidden>
+        <button id="syncAll" class="secondary">↻ Senkronize et</button>
+        <button id="openDeepSeek" class="primary">↗ DeepSeek Chat</button>
+      </div>
+    </header>
+
+    <div class="notice" role="note">
+      <strong>Çalışma sınırı:</strong> Saatlik görevler ve proje kayıtları otomatik hazırlanır; DeepSeek Free web sohbetine otomatik mesaj gönderilmez veya yanıt kazınmaz.
+      Sohbeti DeepSeek üzerinde kendin yürütüp yanıtı buraya yapıştırdığında, izin verilen Drive/GitHub aktarımı otomatik yapılır.
+      Bilgisayar kapalı veya uykudaysa görevler geç çalışabilir.
+    </div>
+
+    <section class="card vault-card" id="stateVaultCard" aria-labelledby="vaultTitle">
+      <div class="section-title"><h2 id="vaultTitle">Yerel veri kasası · AES-256-GCM</h2><span id="stateVaultStatus" class="pill warning">Durum kontrol ediliyor</span></div>
+      <p class="hint" id="stateVaultMessage">Çalışma arşivini yerel diskte şifrelemek için güçlü ve benzersiz bir parola belirle. Parola unutulursa kurtarma mümkün değildir. Kasa kilitliyken görev üretimi ve bulut senkronizasyonu durur.</p>
+      <div class="field-row"><label>Arşiv parolası (en az 12 karakter)<input id="stateVaultPassword" type="password" minlength="12" autocomplete="new-password" placeholder="Güçlü, benzersiz parola"></label>
+        <label>Yeni kasa için parola doğrulama<input id="stateVaultConfirm" type="password" autocomplete="new-password" placeholder="Parolayı tekrar yaz"></label></div>
+      <div class="row-actions"><button id="stateVaultCreate" class="primary">Yerel arşivi şifrele / kasayı oluştur</button><button id="stateVaultUnlock" class="secondary">Kilidi aç</button><button id="stateVaultLock" class="ghost">Kasayı kilitle</button></div>
+    </section>
+
+    <section class="stats">
+      <div class="stat"><span>Tanımlı görev</span><strong id="statTasks">0</strong></div>
+      <div class="stat"><span>Etkin görev</span><strong id="statActive">0</strong></div>
+      <div class="stat"><span>Yanıt bekleyen</span><strong id="statWaiting">0</strong></div>
+      <div class="stat"><span>Tamamlanan tur</span><strong id="statComplete">0</strong></div>
+    </section>
+
+    <nav class="tabs" aria-label="Ana bölümler">
+      <button class="tab active" data-tab="tasks">Görevler</button>
+      <button class="tab" data-tab="workspace">Çalışma alanı</button>
+      <button class="tab" data-tab="connections">Bağlantılar</button>
+      <button class="tab" data-tab="logs">İşlem geçmişi</button>
+      <button class="tab" data-tab="help">Kurulum ve tanılama</button>
+    </nav>
+
+    <div id="status" role="status" aria-live="polite"></div>
+
+    <main>
+      <section id="tasks" class="panel active">
+        <div class="two-columns">
+          <section class="card">
+            <div class="section-title"><h2>Görev oluştur / düzenle</h2><span>Saatlik planlama</span></div>
+            <form id="taskForm" autocomplete="off">
+              <input type="hidden" id="editingId">
+              <div class="field-row">
+                <label>Proje adı<input id="project" maxlength="100" required placeholder="Embasic E-Note"></label>
+                <label>Görev adı<input id="taskName" maxlength="140" required placeholder="Güvenlik testleri"></label>
+              </div>
+              <label>Model talimatı<textarea id="instructions" rows="6" maxlength="20000" required placeholder="Önce geçen turun raporunu incele..."></textarea></label>
+              <div class="field-row">
+                <label>GitHub deposu (opsiyonel)<input id="repo" placeholder="ftmstr/Embasic-E-Note-Build"></label>
+                <label>Başlangıç dalı<input id="baseBranch" placeholder="main (boşsa varsayılan)"></label>
+              </div>
+              <label>Depodan prompt'a dahil edilecek dosya<input id="repoFile" value="README.md" placeholder="README.md"></label>
+              <label class="check"><input id="allowPublicGitHub" type="checkbox"> Bu görevin onaylı raporlarını herkese açık GitHub deposundaki ayrı ajan dalına yüklemeye açıkça izin veriyorum</label>
+              <div class="field-row">
+                <label>Tekrar aralığı (saat)<input type="number" id="intervalHours" min="1" max="168" value="1" required></label>
+                <label>Toplam tur sınırı (0 = sınırsız plan)<input type="number" id="maxRuns" min="0" max="100000" value="5" required></label>
+              </div>
+              <div class="row-actions">
+                <button class="primary" type="submit" id="submitTask">Görevi kaydet</button>
+                <button class="ghost" type="button" id="clearTask">Formu temizle</button>
+              </div>
+            </form>
+          </section>
+          <section class="card">
+            <div class="section-title"><h2>Görevlerim</h2><span id="taskCount">0 görev</span></div>
+            <div id="tasksList" class="list"></div>
+          </section>
+        </div>
+      </section>
+
+      <section id="workspace" class="panel">
+        <div class="two-columns">
+          <section class="card">
+            <div class="section-title"><h2>Hazırlanan çalışma turları</h2><span>Proje bazlı bağımsız</span></div>
+            <div id="runsList" class="list"></div>
+          </section>
+          <section class="card">
+            <div class="section-title"><h2>DeepSeek çalışma aktarımı</h2><span>Kontrollü</span></div>
+            <p class="hint">Bir tur seç; talimatı DeepSeek Chat'e kendin aktar. Üretilen yanıtı kopyalayıp aşağıya yapıştır ve doğruladıktan sonra kaydet. Eklenti DeepSeek sitesindeki sohbeti okumaz.</p>
+            <div id="selectedRunInfo" class="muted-box">Henüz çalışma turu seçilmedi.</div>
+            <label>Hazırlanmış prompt<textarea id="runPrompt" readonly rows="12" placeholder="Talimat burada görüntülenir..."></textarea></label>
+            <div class="row-actions">
+              <button id="copyPrompt" class="primary">Prompt'u kopyala</button>
+              <button id="openChat" class="secondary">DeepSeek'i aç</button>
+            </div>
+            <label>DeepSeek yanıtı<textarea id="modelOutput" rows="12" maxlength="120000" placeholder="Üretilen yanıtı buraya yapıştır..."></textarea></label>
+            <div class="row-actions">
+              <button id="skipRun" class="ghost">Bekleyen turu atla</button>
+              <button id="retryRunSync" class="secondary">Seçili raporu yeniden senkronize et</button>
+              <button id="approvePublicRun" class="ghost" title="Yalnızca bu tur için public GitHub erişimini onayla">Bu turu public GitHub için onayla</button>
+              <button id="saveResult" class="primary">Yanıtı kaydet ve senkronize et</button>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="connections" class="panel">
+        <div class="two-columns">
+          <section class="card">
+            <div class="section-title"><h2>GitHub</h2><span id="githubStatus" class="pill">Bağlanmadı</span></div>
+            <p class="hint">Yalnızca seçtiğin depolara erişebilen fine-grained personal access token oluştur. <b>Contents: Read and write</b> izni gerekli. Depolara kaynak kod yerine sadece ayrı <code>embasic-agent/…</code> dalında rapor yazılır.</p>
+            <label>GitHub token<input id="githubToken" type="password" autocomplete="off" placeholder="github_pat_..."></label>
+            <label class="check"><input id="encryptToken" type="checkbox"> GitHub token'ı şifreli kasada sakla (bilgisayar yeniden açılınca parola ile kilit açılır)</label>
+            <label>Kasa parolası (en az 12 karakter, yalnızca şifreli saklamada)<input id="vaultPassword" type="password" autocomplete="new-password" placeholder="Güçlü bir kasa parolası"></label>
+            <div class="muted-box">Token varsayılan olarak yalnızca Chrome oturumunda tutulur. Şifreli kasayı seçersen token diskte AES-256-GCM ile korunur. Unutulan kasa parolası kurtarılamaz; yeni GitHub token gerekir.</div>
+            <div class="row-actions">
+              <button id="saveGithub" class="primary">GitHub bağlantısını kaydet</button>
+              <button id="clearGithub" class="ghost">Anahtarı sil</button>
+            </div>
+            <div class="field-row"><label>Kilitli kasayı aç<input id="unlockPassword" type="password" autocomplete="off" placeholder="Kasa parolan"></label>
+              <button id="unlockGithub" class="secondary" type="button">Kasayı aç</button></div>
+            <label>Bağlantı kontrolü için depo<input id="githubTestRepo" placeholder="ftmstr/TopWhiz-Build"></label>
+            <button id="testGithub" class="secondary">Depoyu test et</button>
+          </section>
+          <section class="card">
+            <div class="section-title"><h2>Google Drive</h2><span id="googleStatus" class="pill">Bağlanmadı</span></div>
+            <p class="hint">Resmî Google OAuth kullanır. Google hesabının parolasını eklentiye girmezsin. Yalnızca eklentinin oluşturduğu/seçtiğin dosyalara erişmeyi amaçlayan <code>drive.file</code> yetkisi kullanılır.</p>
+            <div class="muted-box">İlk kurulumda Google Cloud üzerinde bir <b>Chrome Extension OAuth Client</b> açıp istemci kimliğini <code>manifest.json</code> içine eklemek gerekir. Kurulum kılavuzuna bak.</div>
+            <div class="row-actions"><button id="googleConnect" class="primary">Google Drive'a bağlan</button>
+              <button id="googleDisconnect" class="ghost">Yerel Google yetkisini temizle</button></div>
+            <p class="hint">Aktarım dizini: Drive / EMBASIC DeepSeek Agent / [Proje Adı + Görev Kimliği] / [Tur UUID].md</p>
+          </section>
+        </div>
+        <section class="card narrow">
+          <div class="section-title"><h2>Otomatik arşivleme</h2><span>Yanıt onayından sonra</span></div>
+          <label class="check"><input id="driveEnabled" type="checkbox" checked> Tamamlanan yanıtı Google Drive'a aktar</label>
+          <label class="check"><input id="githubEnabled" type="checkbox"> Tamamlanan yanıtı GitHub ajan dalına aktar</label>
+          <label class="check"><input id="desktopNotifications" type="checkbox"> Yeni saatlik tur hazırlandığında masaüstü bildirimi göster</label>
+          <p class="hint">GitHub public depo aktarımı hem genel ayarda hem ilgili görevde ayrıca onaylanmalıdır. Önceden tamamlanan raporlar sırf bu seçenek açıldı diye otomatik yüklenmez.</p>
+          <button id="saveSettings" class="secondary">Tercihleri kaydet</button>
+        </section>
+      </section>
+
+      <section id="logs" class="panel">
+        <section class="card">
+          <div class="section-title"><h2>İşlem geçmişi</h2><span>Son 150 kayıt</span></div>
+          <div id="logsList" class="list"></div>
+        </section>
+      </section>
+      <section id="help" class="panel">
+        <div class="two-columns">
+          <section class="card">
+            <div class="section-title"><h2>Kurulum kontrol listesi</h2><span>PC kabul</span></div>
+            <ol class="steps"><li>Chrome uzantısı <code>chrome://extensions</code> üzerinden yüklendi.</li>
+              <li>Google Drive için <code>manifest.json</code> içindeki OAuth Client ID güncellendi ve eklenti yeniden yüklendi.</li>
+              <li>GitHub için seçili depolara izin veren fine-grained token bağlandı.</li>
+              <li>Örnek görev oluşturuldu; DeepSeek yanıtı elle onaylanarak kaydedildi.</li>
+              <li>Drive / GitHub'da rapor dosyası ve yalnızca ajan dalı kontrol edildi.</li>
+            </ol>
+            <div class="row-actions"><button id="diagnostics" class="primary">Yerel tanılama çalıştır</button>
+              <button id="runSchedulerNow" class="secondary">Zamanlayıcıyı şimdi kontrol et</button></div>
+            <pre id="diagnosticsOutput" class="diagnostics" aria-live="polite">Henüz çalıştırılmadı.</pre>
+          </section>
+          <section class="card">
+            <div class="section-title"><h2>Çalışma biçimi ve sınırlar</h2><span>Güvenli mod</span></div>
+            <p class="hint">Bu sürümde DeepSeek Free sohbetinde cevap üretimini <strong>sen</strong> başlatırsın. Uzantı API veya site içi gizli uç nokta kullanarak bu süreci otomatikleştirmez.</p>
+            <p class="hint">Saatlik görevler bilgisayar uykudayken gecikebilir. Uygulama her görev için en fazla bir bekleyen talimat oluşturur, kaçırılmış saatler için toplu istek üretmez.</p>
+            <p class="hint">Yerel arşiv kasası etkinleştirildiğinde proje ve yanıtlar AES-256-GCM ile şifrelenir. Önceki sürümün açık metin verilerini kasaya taşıyabilirsin; güvenli silme işletim sistemi veya SSD üzerinde garanti edilemez. Şifreni kaybedersen kurtarma yoktur.</p>
+            <p class="hint">Yedek geri yükleme tüm görevleri duraklatır ve önceki raporların tekrar internete gönderilmesini kapatır. GitHub token yedeklere dahil edilmez.</p>
+            <p class="hint">Yalnızca hak sahibi olduğun, kişisel veri içermeyen içerikleri DeepSeek'e veya herkese açık GitHub depolarına aktar.</p>
+          </section>
+        </div>
+      </section>
+    </main>
+    <footer>EMBASIC DeepSeek Agent — Yerel Chrome uzantısı. DeepSeek veya Google'ın resmî ürünü değildir. v1.5 TUR006 — DeepSeek web otomasyonu içermez. Kaynak kodu ve kurulum belgelerini inceleyin.</footer>
+  </div>
+</body>
+</html>

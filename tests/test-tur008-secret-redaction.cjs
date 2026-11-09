@@ -1,0 +1,20 @@
+'use strict';
+const assert=require('node:assert/strict');
+const {harness}=require('./harness.cjs');
+(async()=>{
+  const h=harness();
+  const secret='github_pat_SUPER_SECRET_FOR_SYNTHETIC_TEST_1234567890';
+  const raw='provider failed: Bearer abc.def.ghi; token='+secret;
+  h.scope.__raw=raw;
+  const sanitized=require('node:vm').runInContext('errText(new Error(__raw))',h.scope);
+  assert.ok(sanitized.includes('[REDACTED_TOKEN]'));
+  assert.ok(!sanitized.includes(secret));assert.ok(!sanitized.includes('abc.def.ghi'));
+  await h.route('saveSettings',{driveEnabled:false,githubEnabled:false});
+  const state=h.buckets.local.embasicStateV2;h.scope.__state=state;
+  require('node:vm').runInContext('logInState(__state,"error",__raw)',h.scope);
+  assert.ok(!JSON.stringify(state.logs).includes(secret));
+  h.scope.githubRequest=async()=>{throw Error(raw);};
+  const context=await h.scope.githubContext({repo:'fake/repo',repoFile:'README.md',baseBranch:'main'});
+  assert.ok(!context.includes(secret));assert.ok(!context.includes('abc.def.ghi'));
+  console.log('PASS TUR008 redaction: transport exception, persistent logs and external context hide token patterns');
+})().catch(e=>{console.error(e);process.exitCode=1});
