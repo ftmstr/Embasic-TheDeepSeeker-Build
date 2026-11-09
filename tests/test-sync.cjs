@@ -5,15 +5,21 @@ const ok=(data,status=200)=>({ok:true,status,async json(){return data;},async te
 const fail=(status)=>({ok:false,status,async json(){return{};},async text(){return 'failure';}});
 function mockApi({isPublic=false,failFirstDrive=false}={}) {
   const folders={},folderParents={},uploadedFiles={},events=[];let counter=0;
+  const branches=new Map(); const startSha='a'.repeat(40);
   let failUpload=failFirstDrive;
   async function fetch(url,options={}) {
     const u=new URL(url);const method=options.method||'GET';events.push({u,method,options});
     if(u.hostname==='api.github.com') {
       if(u.pathname==='/repos/owner/repo')return ok({full_name:'owner/repo',default_branch:'main',private:!isPublic});
       if(u.pathname.includes('/contents/README.md'))return ok({type:'file',content:btoa('Test README file')});
-      if(u.pathname.endsWith('/git/ref/heads/main'))return ok({object:{sha:'MAIN-SHA-1'}});
-      if(u.pathname.includes('/git/ref/heads/embasic-agent/'))return fail(404);
-      if(u.pathname.endsWith('/git/refs')&&method==='POST')return ok({ref:'test'},201);
+      if(u.pathname.endsWith('/git/ref/heads/main'))return ok({object:{sha:startSha}});
+      if(u.pathname.includes('/git/ref/heads/embasic-agent/')){
+        const name=u.pathname.split('/git/ref/heads/')[1];return branches.has(name)?ok({object:{sha:branches.get(name)}}):fail(404);
+      }
+      if(u.pathname.endsWith('/git/refs')&&method==='POST'){
+        const body=JSON.parse(options.body); const name=body.ref.slice('refs/heads/'.length);
+        if(branches.has(name))return fail(422);branches.set(name,body.sha);return ok({ref:'test'},201);
+      }
       if(u.pathname.includes('/contents/agent-reports/')&&method==='GET')return fail(404);
       if(u.pathname.includes('/contents/agent-reports/')&&method==='PUT'){
         const body=JSON.parse(options.body);

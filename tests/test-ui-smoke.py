@@ -11,7 +11,7 @@ bootstrap=r'''(() => {
 const state={tasks:[],runs:[],logs:[],settings:{driveEnabled:false,githubEnabled:false,desktopNotifications:false}};
 let sealed=false,unlocked=false;
 window.chrome={
- runtime:{id:'testextensionid',lastError:null,getManifest(){return{version:'1.12.0',oauth2:{client_id:'YOUR_GOOGLE_CHROME_EXTENSION_CLIENT_ID.apps.googleusercontent.com'}};},
+ runtime:{id:'testextensionid',lastError:null,getManifest(){return{version:'1.13.0',oauth2:{client_id:'YOUR_GOOGLE_CHROME_EXTENSION_CLIENT_ID.apps.googleusercontent.com'}};},
  sendMessage(msg,callback){try{
   let data=true;
   if(msg.type==='vaultStatus')data={sealed,unlocked,legacyPlaintext:!sealed,required:false,hasRecovery:sealed};
@@ -65,7 +65,7 @@ with sync_playwright() as p:
     page.locator('#statComplete').get_by_text('1').wait_for(timeout=10000)
     page.locator('button[data-tab="help"]').click()
     page.locator('#diagnostics').click()
-    assert 'Sürüm: 1.12.0' in page.locator('#diagnosticsOutput').inner_text()
+    assert 'Sürüm: 1.13.0' in page.locator('#diagnosticsOutput').inner_text()
     assert 'MV3 servis çalışanı: ÇALIŞIYOR / alarm mevcut' in page.locator('#diagnosticsOutput').inner_text()
     if errors: raise AssertionError('Browser JS error(s): '+'; '.join(errors))
     page.locator('#stateVaultPassword').fill('this-is-a-demo-vault-password')

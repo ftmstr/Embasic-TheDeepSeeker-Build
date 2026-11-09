@@ -1,3 +1,27 @@
+# EMBASIC DeepSeek Agent v1.13.0 — TUR014
+
+**Durum: PC_TEST_CANDIDATE / PRODUCTION_NO_GO.** DeepSeek Free web sohbetine otomatik mesaj, DOM kazıma ve izinsiz model erişimi yoktur. Bu proje yalnız kullanıcının inceleyip onayladığı yanıtları arşivler.
+
+## TUR014: kalıcı yazma niyeti, dal yarışları, şifreli kurtarma karantinası
+
+- GitHub `POST /git/refs` çağrısından **önce** şifreli `githubUncertainBranch` işareti kaydedilir: repo, dal kimliği ve başlangıç commit SHA. Makbuz kaybolduğunda uzak `GET 404` ikinci POST'u tetiklemez. `422` eşzamanlı dal oluşturma çatışmasında yalnız aynı başlangıç SHA'sına sahip dal otomatik uzlaştırılır. Dal farklı commit'e ilerlemişse fail-closed; yalnız daha önceki rapor PUT'u kesinleşmemişken, doğru rapor baytlarının varlığını kontrol etmek için istisnai okuma izni vardır. **Bağımsız uzak transaction/dağıtık CAS garantisi yoktur.**
+- Google Drive klasör `POST` ve rapor multipart `POST` öncesi şifreli kalıcı niyet kaydı; kayıt hatasında hiç uzak yazma yapılmaz. Klasör oluşturma makbuzundan sonra uzak sahiplik/parent/id readback zorunlu. 401/429 mutasyon sonucu belirsizliğinde aynı çağrı içinde otomatik POST tekrar edilmez.
+- Kasa `KURTAR` komutuyla bozuk aktif ciphertext yerine eski sağlıklı checkpoint'i açarsa, **tüm görevler duraklatılır**, tamamlanan turların otomatik bulut senkronizasyonu ve eski public onayı iptal edilir, lease'ler temizlenir. Kurtarılmış durum yeniden AES-256-GCM ile yazılmadan açılmaz. Geri alma, harici monotonic anchor / anti-rollback sağlamaz.
+- Tanılama şifreli kasa kilitliyken belirsiz GitHub dal/PUT sayılarını açıklamaz.
+- 7 yeni adversarial Node testi: branch ACK, 422/CAS mock, drive write-ahead, journal crash, vault rollback, advanced Git HEAD / lost PUT ACK, Google OAuth 401/429. Eski 50 test korunur: 57 Node + paket + mock Chromium UI = **59 yerel grup hedefi**; gerçek Windows Chrome ve canlı hesap kabulü bu sayıya dahil değildir.
+
+## Kanonik geliştirme ve rapor zinciri
+
+GitHub: https://github.com/ftmstr/Embasic-TheDeepSeeker-Build. TUR013 Draft PR #2 üzerine stacked TUR014 Draft PR #3. `main` dalı değişmez; hiçbir gerçek token / özel kullanıcı dosyası yüklenmez.
+
+Drive Rapor: https://drive.google.com/drive/folders/12Pn5U54iZZ-xd7Vvm2PcTY97fzWWlRlm. Son commit, CI, gerçek test ve NOT_RUN listesi Drive `ILERLEME_DURUMU.md` dosyasında tutulur.
+
+## Çalıştırma
+
+`bash tests/run_all.sh` veya Windows'ta `powershell -ExecutionPolicy Bypass -File tools/test-windows.ps1`.
+
+`python tests/test-mv3-extension.py` bağımsız gerçek Chrome worker kabul denemesidir; `NOT_RUN` üretim kabulü sayılmaz. OAuth Client ID Chrome eklenti kimliğine özel ayarlanmadıysa canlı Drive bağlantısı çalışmaz.
+
 # EMBASIC DeepSeek Agent v1.12.0 — TUR 013
 
 **Durum:** PC_TEST_CANDIDATE / PRODUCTION_NO_GO. DeepSeek Free web sohbetinde insansız mesaj/DOM otomasyonu yoktur.

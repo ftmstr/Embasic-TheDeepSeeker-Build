@@ -3,11 +3,11 @@ const assert=require('node:assert/strict');
 const {harness}=require('./harness.cjs');
 const ok=data=>({ok:true,status:200,headers:{get:()=>null},json:async()=>data});
 (async()=>{
-  let openPost,signal,posts=0;
+  let openPost,signal,posts=0,remoteCreated=false;
   const gate=new Promise(r=>openPost=r);const entered=new Promise(r=>signal=r);
   const h=harness({googleOauth:true,fetch:async(_url,opt={})=>{
-    if(opt.method==='POST'){posts++;signal();await gate;return ok({id:'shared01'});}
-    return ok({files:[]});
+    if(opt.method==='POST'){posts++;signal();await gate;remoteCreated=true;return ok({id:'shared01'});}
+    return ok({files:remoteCreated?[{id:'shared01',name:'Parallel synthetic',parents:['root'],appProperties:{embasicApp:'EMBASIC'}}]:[]});
   }});
   let firstValid=true,secondValid=true;
   const first=h.scope.ensureDriveFolder('Parallel synthetic',null,async()=>{if(!firstValid)throw Error('first expired');});

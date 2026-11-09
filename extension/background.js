@@ -1,5 +1,5 @@
 'use strict';
-/* EMBASIC DeepSeek Agent 1.12 — task orchestration + approved result sync.
+/* EMBASIC DeepSeek Agent 1.13 — task orchestration + approved result sync.
  * DeepSeek Chat UI automation/scraping is intentionally NOT implemented.
  * GitHub and Google Drive use their documented, authorised APIs.
  */
@@ -55,6 +55,12 @@ function normalizeState(raw) {
       githubRetryAfter:run.githubRetryAfter||null, driveRetryAfter:run.driveRetryAfter||null,
       syncConsent:run.syncConsent!==false, syncLease:run.syncLease||{},
       githubUncertainCommit:run.githubUncertainCommit===true,
+      githubUncertainBranch:(run.githubUncertainBranch &&
+        typeof run.githubUncertainBranch.repo==='string' &&
+        typeof run.githubUncertainBranch.branch==='string' &&
+        /^[0-9a-f]{40}$/.test(run.githubUncertainBranch.baseSha||'')) ?
+        {repo:run.githubUncertainBranch.repo,branch:run.githubUncertainBranch.branch,
+          baseSha:run.githubUncertainBranch.baseSha}:null,
       driveUncertainCommit:run.driveUncertainCommit===true,
       driveUncertainFolder:(run.driveUncertainFolder&&typeof run.driveUncertainFolder.name==='string'&&
         typeof run.driveUncertainFolder.parent==='string')?
@@ -180,8 +186,28 @@ async function restoreLastGoodVault(password,confirmation){
       activeHealthy=true;
     }catch(_ignored){ /* Only authenticated current ciphertext is considered healthy. */ }
     if(activeHealthy)throw new Error('Etkin arşiv sağlam: geri alma yerine şifreli yedek dışa aktar.');
-    // Strictly deliberate rollback of one ciphertext checkpoint; no plaintext fallback.
-    await chrome.storage.local.set({[SEALED_KEY]:backup});
+    // An older valid checkpoint can predate a remote mutation and its local
+    // write-intent marker. Never resume uploads or scheduler turns automatically
+    // after deliberately restoring an earlier snapshot. This is NOT hardware
+    // anti-rollback protection: users must inspect remote records before retry.
+    for(const task of state.tasks)task.enabled=false;
+    for(const run of state.runs){
+      run.syncConsent=false;
+      run.publicConsentManual=false;
+      run.publicConsentAtCompletion=false;
+      run.syncLease={};
+      if(run.status==='completed'){
+        run.githubSync='blocked';run.driveSync='blocked';
+        run.githubError='Kasa kurtarıldı: uzak geçmiş doğrulanmadan yeniden aktarım yasak.';
+        run.driveError='Kasa kurtarıldı: uzak geçmiş doğrulanmadan yeniden aktarım yasak.';
+      }
+    }
+    state.schedulerCheckpoint={lastTickAt:null,deferredTasks:0};
+    logInState(state,'warning','Kasa geri alındı: görevler duraklatıldı ve bulut aktarımı kullanıcı incelemesine alındı.');
+    // Re-encrypt the quarantined state BEFORE allowing session access. Reusing
+    // the older ciphertext as-is would silently restore old publish consent.
+    const quarantined=await encryptEnvelope(state,key,salt,backup.iterations);
+    await chrome.storage.local.set({[SEALED_KEY]:quarantined});
     await chrome.storage.session.set({[SESSION_KEY]:b64(key)});
     await chrome.storage.local.remove([STATE_KEY,LEGACY_KEY,'githubPersistentToken']);
     updateBadge(state);return {tasks:state.tasks.length,runs:state.runs.length};
@@ -569,17 +595,52 @@ async function assertLiveSyncLease(runId,provider,leaseId) {
   }
   return true;
 }
-async function ensureGithubBranch(task,checkLease=async()=>true) {
+async function ensureGithubBranch(task,checkLease=async()=>true,persistBranchIntent=async()=>{},uncertainBranch=null,remotePutMayHaveCommitted=false) {
   const [owner,repo]=task.repo.split('/').map(encodeURIComponent),root=`/repos/${owner}/${repo}`;
   const branch=`embasic-agent/${task.id}`;
-  if(await githubRequest(`${root}/git/ref/heads/${branch}`,{allow404:true}))return branch;
+  if(uncertainBranch && (uncertainBranch.repo!==task.repo || uncertainBranch.branch!==branch))
+    throw new Error('Eski dal oluşturma işareti farklı depoya veya göreve ait; yazma engellendi.');
+  const remote=await githubRequest(`${root}/git/ref/heads/${branch}`,{allow404:true});
+  if(remote){
+    // A previously ambiguous create may be reconciled only if the new branch
+    // still points to its recorded base. Another writer may advance this ref;
+    // that requires explicit review, not blind acceptance.
+    if(uncertainBranch && remote.object?.sha!==uncertainBranch.baseSha && !remotePutMayHaveCommitted)
+      throw new Error('Belirsiz dalın uzak HEAD değeri değişmiş; kullanıcı incelemesi gerekli.');
+    // If a prior PUT may already have advanced HEAD, the downstream GitHub
+    // content check is read-only until exact remote bytes are authenticated.
+    // Otherwise an earlier successful PUT with lost ACK could never recover.
+    return branch;
+  }
+  if(uncertainBranch){
+    const error=new Error('GitHub dal oluşturma sonucu belirsiz; uzak dal bulunmadan POST tekrarlanmayacak.');
+    error.remoteBranchUncertain=true;error.transient=true;throw error;
+  }
   const info=await githubRequest(root);const base=validateBranch(task.baseBranch||info.default_branch);
   const ref=await githubRequest(`${root}/git/ref/heads/${encodeURIComponent(base)}`);
-  try {await checkLease();await githubRequest(`${root}/git/refs`,{method:'POST',body:{ref:`refs/heads/${branch}`,sha:ref.object.sha}});}
-  catch(e){if(!(await githubRequest(`${root}/git/ref/heads/${branch}`,{allow404:true})))throw e;}
+  const baseSha=ref?.object?.sha;
+  if(typeof baseSha!=='string'||!/^[0-9a-f]{40}$/.test(baseSha))
+    throw new Error('GitHub temel dal kimliği doğrulanamadı; yeni dal oluşturulmadı.');
+  await checkLease();
+  // Local encrypted intent is a crash fence, not a distributed compare-and-set.
+  await persistBranchIntent({repo:task.repo,branch,baseSha});
+  await checkLease();
+  try{
+    await githubRequest(`${root}/git/refs`,{method:'POST',body:{ref:`refs/heads/${branch}`,sha:baseSha}});
+  }catch(e){
+    e.remoteBranchUncertain=true;e.transient=true;
+    // A 409/422 or lost ACK could mean a concurrent writer created the ref.
+    // Recover ONLY a branch with exactly the recorded starting SHA.
+    let observed;
+    try{observed=await githubRequest(`${root}/git/ref/heads/${branch}`,{allow404:true});}
+    catch{throw e;}
+    if(!observed)throw e;
+    if(observed.object?.sha!==baseSha)
+      throw new Error('GitHub dalı başka yazıcı tarafından değişmiş; otomatik devam edilmiyor.');
+  }
   return branch;
 }
-async function githubUpload(run,task,checkLease=async()=>true,persistWriteIntent=async()=>{}) {
+async function githubUpload(run,task,checkLease=async()=>true,persistWriteIntent=async()=>{},persistBranchIntent=async()=>{}) {
   if(!task.repo)return;
   if(run.project!==task.project||run.taskId!==task.id)
     throw new Error('Turun proje kimliği eşleşmiyor; GitHub aktarımı engellendi.');
@@ -593,7 +654,7 @@ async function githubUpload(run,task,checkLease=async()=>true,persistWriteIntent
   const content=reportText(run);
   if(detectSecrets(content))throw new Error('Rapor gizli anahtara benzeyen içerik taşıyor; aktarım güvenlik nedeniyle engellendi.');
   await checkLease();
-  const branch=await ensureGithubBranch(task,checkLease);
+  const branch=await ensureGithubBranch(task,checkLease,persistBranchIntent,run.githubUncertainBranch,run.githubUncertainCommit===true);
   const url=`${root}/contents/${cleanPath(`agent-reports/${task.id}/${run.id}.md`)}`;
   const current=await githubRequest(`${url}?ref=${encodeURIComponent(branch)}`,{allow404:true});
   if(current){
@@ -681,7 +742,7 @@ async function findDriveFolder(name,parent=null) {
   return matches[0]?.id||null;
 }
 const driveFolderFlights=new Map();
-async function ensureDriveFolder(name,parent=null,checkLease=async()=>true,uncertainFolder=null) {
+async function ensureDriveFolder(name,parent=null,checkLease=async()=>true,uncertainFolder=null,persistFolderIntent=async()=>{}) {
   // Coalesce concurrent attempts in the same worker; avoid avoidable duplicate
   // Google Drive folder creation on a lost response by reading back metadata.
   await checkLease();
@@ -704,11 +765,21 @@ async function ensureDriveFolder(name,parent=null,checkLease=async()=>true,uncer
       appProperties:{embasicApp:'EMBASIC'},...(parent?{parents:[parent]}:{})};
     try {
       await checkLease();
+      await persistFolderIntent({name,parent:parent||'root'});
+      await checkLease();
       const file=await driveRequest('/drive/v3/files?fields=id',{method:'POST',contentType:'application/json',body:JSON.stringify(metadata)});
       if(typeof file?.id!=='string'||!/^[A-Za-z0-9_-]{2,160}$/.test(file.id)){
         const error=new Error('Drive klasörü oluşturuldu ancak geçerli kimlik dönmedi.');
         error.transient=true; // malformed post-commit receipt is also ambiguous
         throw error;
+      }
+      // A valid create receipt does not prove that the app-owned folder is
+      // visible at its intended parent. Do not replace the first unresolved
+      // folder journal with a second folder's journal until this readback.
+      const verified=await findDriveFolder(name,parent);
+      if(verified!==file.id){
+        const error=new Error('Drive klasör makbuzu henüz uzaktan doğrulanamadı.');
+        error.transient=true;throw error;
       }
       return file.id;
     }catch(error){
@@ -736,15 +807,15 @@ async function sha256Hex(content){
   const hash=new Uint8Array(await crypto.subtle.digest('SHA-256',ENCODER.encode(content)));
   return Array.from(hash,b=>b.toString(16).padStart(2,'0')).join('');
 }
-async function driveUpload(run,checkLease=async()=>true) {
+async function driveUpload(run,checkLease=async()=>true,persistUploadIntent=async()=>{},persistFolderIntent=async()=>{}) {
   if(!validId(run.taskId)||!validId(run.id))throw new Error('Drive arşiv kimliği geçersiz.');
   const content=reportText(run);
   if(detectSecrets(content))throw new Error('Raporda gizli anahtara benzeyen içerik tespit edildi; Drive aktarımı engellendi.');
   const digest=await sha256Hex(content);
   await checkLease();
-  const root=await ensureDriveFolder('EMBASIC DeepSeek Agent',null,checkLease,run.driveUncertainFolder);
+  const root=await ensureDriveFolder('EMBASIC DeepSeek Agent',null,checkLease,run.driveUncertainFolder,persistFolderIntent);
   const projectName=`${safeText(run.project,75)} [${run.taskId.slice(0,12)}]`;
-  const project=await ensureDriveFolder(projectName,root,checkLease,run.driveUncertainFolder);
+  const project=await ensureDriveFolder(projectName,root,checkLease,run.driveUncertainFolder,persistFolderIntent);
   const name=`${run.id}.md`;
   const query=`name = '${driveEscape(name)}' and '${project}' in parents and trashed = false`+
     ` and appProperties has { key = 'embasicRun' and value = '${run.id}' }`;
@@ -776,6 +847,8 @@ async function driveUpload(run,checkLease=async()=>true) {
   const metadata={name,mimeType:'text/markdown',parents:[project],
     appProperties:{embasicApp:'EMBASIC',embasicRun:run.id,embasicTask:run.taskId,embasicSha256:digest}};
   const multipart=multipartBody(metadata,content);
+  await checkLease();
+  await persistUploadIntent();
   await checkLease();
   // All failures from this point are potentially post-commit. We cannot
   // assume absence merely because a response was lost or readback is 404.
@@ -877,8 +950,39 @@ async function syncPending() {
                 throw new Error('GitHub PUT niyeti eski lease veya görev revizyonuyla kaydedilemez.');
               current.githubUncertainCommit=true;
             });
+          },async marker=>{
+            await modifyState(s=>{
+              const current=s.runs.find(r=>r.id===run.id),task=s.tasks.find(t=>t.id===run.taskId);
+              if(!current||!task||current.syncLease?.github?.id!==leaseId||
+                 !(current.syncLease.github.until>Date.now())||current.syncConsent===false||
+                 (current.taskRevision||1)!==(task.revision||1)||
+                 current.project!==task.project||current.sourceRepo!==task.repo||
+                 s.settings.githubEnabled!==true)
+                throw new Error('GitHub dal oluşturma niyeti için lease/revizyon geçersiz.');
+              current.githubUncertainBranch=marker;
+            });
           });
-          else await driveUpload(activeRun,checkLease);
+          else await driveUpload(activeRun,checkLease,async()=>{
+            await modifyState(s=>{
+              const current=s.runs.find(r=>r.id===run.id),task=s.tasks.find(t=>t.id===run.taskId);
+              if(!current||!task||current.syncLease?.drive?.id!==leaseId||
+                 !(current.syncLease.drive.until>Date.now())||current.syncConsent===false||
+                 (current.taskRevision||1)!==(task.revision||1)||
+                 current.project!==task.project||s.settings.driveEnabled!==true)
+                throw new Error('Drive upload niyeti için lease/revizyon geçersiz.');
+              current.driveUncertainCommit=true;
+            });
+          },async folder=>{
+            await modifyState(s=>{
+              const current=s.runs.find(r=>r.id===run.id),task=s.tasks.find(t=>t.id===run.taskId);
+              if(!current||!task||current.syncLease?.drive?.id!==leaseId||
+                 !(current.syncLease.drive.until>Date.now())||current.syncConsent===false||
+                 (current.taskRevision||1)!==(task.revision||1)||
+                 current.project!==task.project||s.settings.driveEnabled!==true)
+                throw new Error('Drive klasör niyeti için lease/revizyon geçersiz.');
+              current.driveUncertainFolder=folder;
+            });
+          });
           // The worker can suspend during a remote POST/PUT. A late successful
           // HTTP response is not authority to mark an expired lease as synced.
           await checkLease();
@@ -898,7 +1002,10 @@ async function syncPending() {
             }
             delete current.syncLease[provider];
             current[statusKey]='synced';current[retryKey]=null;current[`${provider}Error`]='';
-            if(provider==='github')current.githubUncertainCommit=false;
+            if(provider==='github'){
+              current.githubUncertainCommit=false;
+              current.githubUncertainBranch=null;
+            }
             if(provider==='drive'){
               current.driveUncertainCommit=false;
               current.driveUncertainFolder=null;
@@ -909,7 +1016,11 @@ async function syncPending() {
           await modifyState(s=>{const current=s.runs.find(r=>r.id===run.id);
             if(current?.syncLease?.[provider]?.id!==leaseId)return;
             delete current.syncLease[provider];
-            if(provider==='github'&&e.remoteCommitUncertain===true)current.githubUncertainCommit=true;
+            if(provider==='github'){
+              if(e.remoteCommitUncertain===true)current.githubUncertainCommit=true;
+              // A persisted branch-creation marker is deliberately NOT cleared
+              // by errors, expiry, or manual retries.
+            }
             if(provider==='drive'){
               if(e.remoteCommitUncertain===true)current.driveUncertainCommit=true;
               if(e.remoteFolderCommitUncertain)current.driveUncertainFolder=e.remoteFolderCommitUncertain;
@@ -1002,7 +1113,7 @@ async function safeDiagnostics() {
     vaultStatus(),chrome.alarms.get(SCHEDULER_ALARM),chrome.storage.local.get(REQUIRE_VAULT_KEY)
   ]);
   let summary={taskCount:null,waitingCount:null,retryCount:null,blockedCount:null,liveLeases:null,
-    staleLeases:null,nextDueAt:null,lastSchedulerAt:null,deferredTasks:null,uncertainGithubCommits:null,uncertainDriveCommits:null,uncertainDriveFolders:null};
+    staleLeases:null,nextDueAt:null,lastSchedulerAt:null,deferredTasks:null,uncertainGithubCommits:null,uncertainGithubBranches:null,uncertainDriveCommits:null,uncertainDriveFolders:null};
   if(vault.sealed&&vault.unlocked){
     const state=await loadState();
     const active=state.runs.filter(r=>r.status==='completed');
@@ -1015,6 +1126,7 @@ async function safeDiagnostics() {
       lastSchedulerAt:state.schedulerCheckpoint?.lastTickAt||null,
       deferredTasks:state.schedulerCheckpoint?.deferredTasks||0,
       uncertainGithubCommits:active.filter(r=>r.githubUncertainCommit===true).length,
+      uncertainGithubBranches:active.filter(r=>!!r.githubUncertainBranch).length,
       uncertainDriveCommits:active.filter(r=>r.driveUncertainCommit===true).length,
       uncertainDriveFolders:active.filter(r=>r.driveUncertainFolder!==null&&!!r.driveUncertainFolder).length};
   }
