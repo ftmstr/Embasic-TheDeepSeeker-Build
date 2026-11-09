@@ -45,6 +45,10 @@
     await verifyClaimCommit(claim,request);
     return {status:'owned',ref:refFor(claim),sha};
   }
+  async function requireLease(checkLease){
+    if(typeof checkLease!=='function'||await checkLease()!==true)
+      throw fail('CLAIM_LEASE_DENIED','A current positive lease/fence decision is required.');
+  }
   async function acquire(raw,{request,persistIntent,checkLease=async()=>true,previousIntent=null}={}){
     const claim=validate(raw);
     if(typeof request!=='function'||typeof persistIntent!=='function')
@@ -56,11 +60,11 @@
     if(first.status==='owned')return first;
     if(previousIntent)throw fail('CLAIM_UNCERTAIN_NO_REPLAY',
       'Previous remote claim POST may have committed; stale GET 404 does not authorize replay.');
-    await checkLease();
+    await requireLease(checkLease);
     // Caller MUST persist intent before a potentially committed POST. If this
     // fails, no GitHub mutation is attempted.
     await persistIntent({...claim,ref:refFor(claim),status:'uncertain'});
-    await checkLease();
+    await requireLease(checkLease);
     try {
       await request(`${pathFor(claim)}/git/refs`,{method:'POST',
         body:{ref:refFor(claim),sha:claim.claimSha}});
@@ -75,13 +79,13 @@
     const verified=await observe(claim,request);
     if(verified.status!=='owned')throw fail('CLAIM_UNCERTAIN_NO_REPLAY',
       'Successful POST receipt without remote readback is not write authority.');
-    await checkLease();return verified;
+    await requireLease(checkLease);return verified;
   }
   async function verifyBeforeWrite(raw,{request,checkLease=async()=>true}={}){
-    const claim=validate(raw);await checkLease();
+    const claim=validate(raw);await requireLease(checkLease);
     const verified=await observe(claim,request);
     if(verified.status!=='owned')throw fail('CLAIM_NOT_VISIBLE','Claim is not visible; deny remote mutation.');
-    await checkLease();return verified;
+    await requireLease(checkLease);return verified;
   }
   const api=Object.freeze({validate,refFor,messageFor,acquire,verifyBeforeWrite});
   root.EmbasicRemoteClaim=api;
