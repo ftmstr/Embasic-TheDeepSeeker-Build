@@ -22,7 +22,7 @@ jobs:
         run: |
           set -euo pipefail
           count=$(find tests -maxdepth 1 -name 'test-*.cjs' | wc -l)
-          test "$count" -eq 79
+          test "$count" -eq 80
           for file in tests/test-*.cjs; do node "$file"; done
       - name: Structural Chrome extension tests
         run: python tests/test-package.py
@@ -56,6 +56,6 @@ jobs:
         shell: pwsh
         run: |
           $tests = @(Get-ChildItem tests/test-*.cjs)
-          if ($tests.Count -ne 79) { throw "Expected 79 Node tests, got $($tests.Count)" }
+          if ($tests.Count -ne 80) { throw "Expected 80 Node tests, got $($tests.Count)" }
           foreach ($test in $tests) { node $test.FullName; if ($LASTEXITCODE -ne 0) { throw "FAIL: $($test.Name)" } }
       - run: python tests/test-package.py
