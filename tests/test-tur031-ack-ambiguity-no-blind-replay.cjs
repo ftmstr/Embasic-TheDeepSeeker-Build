@@ -9,6 +9,9 @@ function classify({status, sent, durableIntent, readback, generation, expectedGe
   if (status === 401 || status === 403) return 'DENY_AUTH_AND_RECONCILE';
   if (status === 429 || status === 503 || status === null) {
     if (!readback || readback.kind === 'unavailable') return 'HOLD_AMBIGUOUS_NO_REPLAY';
+    if (!Number.isSafeInteger(generation) || !Number.isSafeInteger(expectedGeneration) ||
+        generation !== expectedGeneration || !Number.isSafeInteger(readback.generation))
+      return 'CONFLICT_NO_REPLAY';
     if (readback.kind === 'match' && readback.generation === generation) return 'ACK_RECONCILED';
     if (readback.kind === 'different' || readback.generation !== expectedGeneration)
       return 'CONFLICT_NO_REPLAY';
@@ -29,10 +32,12 @@ test('TUR031: unauthorized response never implies safe retry', () => {
   }
 });
 test('TUR031: only exact generation match can reconcile ambiguous ACK', () => {
-  const base={status:503,sent:true,durableIntent:true,generation:8,expectedGeneration:7};
+  const base={status:503,sent:true,durableIntent:true,generation:8,expectedGeneration:8};
   assert.equal(classify({...base,readback:{kind:'match',generation:8}}),'ACK_RECONCILED');
   assert.equal(classify({...base,readback:{kind:'match',generation:7}}),'CONFLICT_NO_REPLAY');
   assert.equal(classify({...base,readback:{kind:'different',generation:8}}),'CONFLICT_NO_REPLAY');
+  assert.equal(classify({...base,expectedGeneration:7,readback:{kind:'match',generation:8}}),'CONFLICT_NO_REPLAY');
+  assert.equal(classify({...base,generation:undefined,readback:{kind:'match',generation:8}}),'CONFLICT_NO_REPLAY');
 });
 test('TUR031: durable intent and cross-profile isolation are mandatory boundaries', () => {
   assert.equal(classify({status:503,sent:true,durableIntent:false}),'DENY_NO_DURABLE_INTENT');
