@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""TUR026: deterministic tracked-source and unpacked-Chrome ZIP evidence, CI only.
+"""Deterministic tracked-source and unpacked-Chrome ZIP evidence, CI only.
 
 Never uses secrets, provider tokens, the DeepSeek web UI, or a live Chrome profile.
 The generated archives are test candidates, not release approvals.
@@ -75,12 +75,14 @@ def make_zip(target: Path, entries: list[tuple[str, bytes, int, str]], chrome: b
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out-dir", required=True, type=Path)
+    ap.add_argument("--tur", required=True, choices=["TUR026", "TUR027"],
+                    help="Exact independently verified round ID; never silently relabel an archive.")
     args = ap.parse_args()
     out_dir = args.out_dir.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     entries = collect()
-    source = out_dir / "EMBASIC_TheDeepSeeker_TUR026_Source.zip"
-    chrome = out_dir / "EMBASIC_TheDeepSeeker_TUR026_Chrome_MV3.zip"
+    source = out_dir / f"EMBASIC_TheDeepSeeker_{args.tur}_Source.zip"
+    chrome = out_dir / f"EMBASIC_TheDeepSeeker_{args.tur}_Chrome_MV3.zip"
     source_names = make_zip(source, entries, chrome=False)
     chrome_names = make_zip(chrome, entries, chrome=True)
     if "manifest.json" not in chrome_names or "background.js" not in chrome_names:
@@ -90,7 +92,7 @@ def main() -> None:
         raise RuntimeError("Unexpected Chrome manifest identity/version")
     head = git("rev-parse", "HEAD").decode().strip()
     provenance = {
-        "tur": "TUR026",
+        "tur": args.tur,
         "head": head,
         "manifestVersion": manifest["version"],
         "sourceCount": len(source_names),
