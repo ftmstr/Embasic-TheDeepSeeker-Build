@@ -22,6 +22,25 @@ const a={repositoryId:'R_syntheticRepositoryID123',refName:'refs/heads/embasic-f
  let after=a.beforeOid;
  const ignored={...d,readRef:async n=>({name:n,oid:after}),graphql:async()=>{writes++;return {data:{updateRefs:{clientMutationId:cas.validate(a).clientMutationId}}};}};
  await assert.rejects(cas.commit(a,ignored),{code:'CAS_UNCERTAIN_NO_REPLAY'});
+ // TUR032: a fake successful GraphQL ACK plus matching ref OID is insufficient
+ // if immutable commit metadata does not bind the original owner/digest.
+ writes=intents=0;
+ const forged={...d,
+   readRef:async n=>({name:n,oid:writes?a.afterOid:a.beforeOid}),
+   verifyCommit:async oid=>({oid,message:'FORGED OWNER OR REPORT DIGEST'}),
+   graphql:async()=>{writes++;return {data:{updateRefs:{clientMutationId:cas.validate(a).clientMutationId}}};}};
+ await assert.rejects(cas.commit(a,forged),{code:'CAS_COMMIT_UNVERIFIED'});
+ assert.equal(writes,1);assert.equal(intents,1);
+ // A durable uncertain intent must not be replayed, even if the ref still
+ // appears unchanged after a lost ACK. A matching intent is not a retry permit.
+ writes=intents=0;
+ const previous=cas.validate(a);
+ await assert.rejects(cas.commit(a,{...d,previousIntent:previous}),{code:'CAS_UNCERTAIN_NO_REPLAY'});
+ assert.equal(writes,0);assert.equal(intents,0);
+ // Different owner nonce cannot adopt another writer's durable intent.
+ await assert.rejects(cas.commit({...a,ownerNonce:'3'.repeat(32)},
+   {...d,previousIntent:previous}),{code:'CAS_STALE_INTENT'});
+ assert.equal(writes,0);
  // A post-mutation status check cannot turn a stale writer into authority.
  // Before and after cases require external monotonic witness: NOT_PROVEN.
  console.log('PASS TUR025 fail-closed lease / journal / invalid ref / fake GraphQL receipt; real CAS & witness NOT_RUN');
