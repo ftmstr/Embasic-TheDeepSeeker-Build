@@ -250,6 +250,66 @@ with sync_playwright() as p, TemporaryDirectory() as directory:
                 assert checkpoint_now['data']['uncertainGithubCommits']==0 and checkpoint_now['data']['uncertainDriveCommits']==0
                 assert checkpoint_now['data']['liveLeases']==0 and checkpoint_now['data']['staleLeases']==0
                 print('PASS MV3 TUR030 RESTART-ALARM: second real Chrome restart clears key, preserves encrypted checkpoint and unique run, second native alarm advances checkpoint, zero leases')
+            # TUR031: An alarm delivered while the authenticated vault is LOCKED
+            # must not advance encrypted scheduler state or resurrect a lease.
+            # A second native alarm after explicit unlock must work normally.
+            if os.environ.get('EMBASIC_TUR031_LOCKED_ALARM','0')=='1':
+                assert os.environ.get('EMBASIC_TUR030_RESTART_ALARM','0')=='1','TUR031 needs prior real Chrome restart evidence'
+                checkpoint_before=second_send({'type':'diagnostics'})['data']['lastSchedulerAt']
+                state_before=second_send({'type':'snapshot'})
+                assert state_before['ok'] and len(state_before['data']['runs'])==1
+                expected_run_id=state_before['data']['runs'][0]['id']
+                encrypted_before=second_boot.evaluate("""async ()=>(await chrome.storage.local.get('embasicSealedStateV3')).embasicSealedStateV3""")
+                assert encrypted_before and encrypted_before['data'],'No encrypted vault before locked alarm'
+                assert second_send({'type':'vaultLock'})['ok'],'Cannot lock vault before alarm'
+                locked_diagnostics=second_send({'type':'diagnostics'})
+                assert locked_diagnostics['ok'] and locked_diagnostics['data']['vaultSealed'] and not locked_diagnostics['data']['vaultUnlocked']
+                assert not second_send({'type':'snapshot'})['ok'],'Locked MV3 worker leaked protected data'
+                second_boot.evaluate("""async()=>{
+                  window.__tur031AlarmSeen=false;
+                  chrome.alarms.onAlarm.addListener(a=>{
+                    if(a.name==='embasic-scheduler')window.__tur031AlarmSeen=true;
+                  });
+                  await chrome.alarms.create('embasic-scheduler',{when:Date.now()+2500,periodInMinutes:1});
+                }""")
+                alarm_seen=False
+                locked_alarm_deadline=time.monotonic()+30
+                while time.monotonic()<locked_alarm_deadline:
+                    second_boot.wait_for_timeout(400)
+                    if second_boot.evaluate('() => window.__tur031AlarmSeen === true'):
+                        alarm_seen=True
+                        break
+                assert alarm_seen,'Native Chrome alarm was not observed by extension-page alarm listener'
+                second_boot.wait_for_timeout(450)
+                encrypted_locked=second_boot.evaluate("""async ()=>(await chrome.storage.local.get('embasicSealedStateV3')).embasicSealedStateV3""")
+                assert encrypted_locked==encrypted_before,'Native alarm rewrote ciphertext while vault was locked'
+                assert second_send({'type':'vaultUnlock','password':passphrase})['ok']
+                restored_checkpoint=second_send({'type':'diagnostics'})['data']['lastSchedulerAt']
+                assert restored_checkpoint==checkpoint_before,'Locked native alarm advanced protected scheduler checkpoint'
+                after_locked=second_send({'type':'snapshot'})
+                assert after_locked['ok'] and len(after_locked['data']['runs'])==1
+                assert after_locked['data']['runs'][0]['id']==expected_run_id
+                assert after_locked['data']['runs'][0]['status']=='waiting'
+                print('PASS MV3 TUR031 LOCKED-ALARM: real chrome.alarms delivered while sealed vault locked, ciphertext/checkpoint unchanged, no lease/replay')
+                second_boot.evaluate("""async()=>{
+                    await chrome.alarms.create('embasic-scheduler',{when:Date.now()+2500,periodInMinutes:1});
+                }""")
+                deadline=time.monotonic()+float(os.environ.get('EMBASIC_TUR031_ALARM_TIMEOUT_S','70'))
+                advanced=False
+                while time.monotonic()<deadline:
+                    time.sleep(0.8)
+                    diag=second_send({'type':'diagnostics'})
+                    assert diag['ok']
+                    if diag['data']['lastSchedulerAt']>restored_checkpoint:
+                        advanced=True
+                        break
+                assert advanced,'Native Chrome alarm did not advance after explicit vault unlock'
+                final_state=second_send({'type':'snapshot'})
+                assert final_state['ok'] and len(final_state['data']['runs'])==1
+                assert final_state['data']['runs'][0]['id']==expected_run_id
+                assert diag['data']['liveLeases']==0 and diag['data']['staleLeases']==0
+                assert diag['data']['uncertainGithubCommits']==0 and diag['data']['uncertainDriveCommits']==0
+                print('PASS MV3 TUR031 UNLOCK-ALARM: actual native alarm advances checkpoint after unlock, stable run ID and zero stale/live leases')
             print('PASS MV3 REAL worker: fresh install, alarm, vault lock/unlock, actual browser restart, no duplicate')
         except Exception as err:
             print('FAIL MV3 REAL worker:',type(err).__name__,str(err)[:350],file=sys.stderr)
