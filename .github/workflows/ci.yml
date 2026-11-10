@@ -22,7 +22,7 @@ jobs:
         run: |
           set -euo pipefail
           count=$(find tests -maxdepth 1 -name 'test-*.cjs' | wc -l)
-          test "$count" -eq 93
+          test "$count" -eq 95
           for file in tests/test-*.cjs; do node "$file"; done
       - name: Structural Chrome extension tests
         run: python tests/test-package.py
@@ -46,20 +46,20 @@ jobs:
         run: |
           set -euo pipefail
           CHROMIUM_PATH="$(python -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()')"
-          export CHROMIUM_PATH EMBASIC_HEADLESS=1 EMBASIC_REQUIRE_MV3=0 EMBASIC_MV3_WAIT_MS=9000 EMBASIC_TUR029_PROFILE_PROBE=1 EMBASIC_TUR029_NATIVE_ALARM=1 EMBASIC_TUR029_ALARM_TIMEOUT_S=70 EMBASIC_TUR030_RESTART_ALARM=1 EMBASIC_TUR030_ALARM_TIMEOUT_S=70 EMBASIC_TUR031_LOCKED_ALARM=1 EMBASIC_TUR031_ALARM_TIMEOUT_S=70
+          export CHROMIUM_PATH EMBASIC_HEADLESS=1 EMBASIC_REQUIRE_MV3=0 EMBASIC_MV3_WAIT_MS=9000 EMBASIC_TUR029_PROFILE_PROBE=1 EMBASIC_TUR029_NATIVE_ALARM=1 EMBASIC_TUR029_ALARM_TIMEOUT_S=70 EMBASIC_TUR030_RESTART_ALARM=1 EMBASIC_TUR030_ALARM_TIMEOUT_S=70 EMBASIC_TUR031_LOCKED_ALARM=1 EMBASIC_TUR031_ALARM_TIMEOUT_S=70 EMBASIC_TUR032_LOCKED_RESTART=1 EMBASIC_TUR032_ALARM_TIMEOUT_S=70
           set +e
-          timeout --signal=TERM --kill-after=5s 300s python -u tests/test-mv3-extension.py 2>&1 | tee "$RUNNER_TEMP/tur031-mv3-probe.log"
+          timeout --signal=TERM --kill-after=5s 360s python -u tests/test-mv3-extension.py 2>&1 | tee "$RUNNER_TEMP/tur032-mv3-probe.log"
           rc=${PIPESTATUS[0]}
           set -e
           if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
-            printf 'NOT_RUN: Linux MV3 probe timed out (not PASS).\n' | tee -a "$RUNNER_TEMP/tur031-mv3-probe.log"
-            echo '::notice::Real TUR031 Chrome profile/locked alarm MV3 probe NOT_RUN due to timeout; no physical Windows evidence'
+            printf 'NOT_RUN: Linux MV3 probe timed out (not PASS).\n' | tee -a "$RUNNER_TEMP/tur032-mv3-probe.log"
+            echo '::notice::Real TUR032 Chrome locked restart/alarms MV3 probe NOT_RUN due to timeout; no physical Windows evidence'
           elif [ "$rc" -ne 0 ]; then
             echo '::error::Genuine MV3 worker assertion failed; see log'
             exit "$rc"
-          elif grep -q '^PASS MV3 REAL worker:' "$RUNNER_TEMP/tur031-mv3-probe.log" && grep -q '^PASS MV3 TUR029: two real Chrome profiles' "$RUNNER_TEMP/tur031-mv3-probe.log" && grep -q '^PASS MV3 TUR029 NATIVE ALARM:' "$RUNNER_TEMP/tur031-mv3-probe.log" && grep -q '^PASS MV3 TUR030 RESTART-ALARM:' "$RUNNER_TEMP/tur031-mv3-probe.log" && grep -q '^PASS MV3 TUR031 LOCKED-ALARM:' "$RUNNER_TEMP/tur031-mv3-probe.log" && grep -q '^PASS MV3 TUR031 UNLOCK-ALARM:' "$RUNNER_TEMP/tur031-mv3-probe.log"; then
-            echo '::notice::TUR031 real Linux Chromium MV3 locked/unlocked native alarm + restart/profiles PASSED; physical Windows/24h still NOT_RUN'
-          elif grep -q '^NOT_RUN MV3:' "$RUNNER_TEMP/tur031-mv3-probe.log"; then
+          elif grep -q '^PASS MV3 REAL worker:' "$RUNNER_TEMP/tur032-mv3-probe.log" && grep -q '^PASS MV3 TUR029: two real Chrome profiles' "$RUNNER_TEMP/tur032-mv3-probe.log" && grep -q '^PASS MV3 TUR029 NATIVE ALARM:' "$RUNNER_TEMP/tur032-mv3-probe.log" && grep -q '^PASS MV3 TUR030 RESTART-ALARM:' "$RUNNER_TEMP/tur032-mv3-probe.log" && grep -q '^PASS MV3 TUR031 LOCKED-ALARM:' "$RUNNER_TEMP/tur032-mv3-probe.log" && grep -q '^PASS MV3 TUR031 UNLOCK-ALARM:' "$RUNNER_TEMP/tur032-mv3-probe.log" && grep -q '^PASS MV3 TUR032 LOCKED-RESTART:' "$RUNNER_TEMP/tur032-mv3-probe.log" && grep -q '^PASS MV3 TUR032 RESTART-UNLOCK-ALARM:' "$RUNNER_TEMP/tur032-mv3-probe.log"; then
+            echo '::notice::TUR032 Linux Chromium genuine MV3 sealed restart and real native alarm checkpoints PASSED; physical Windows/24h still NOT_RUN'
+          elif grep -q '^NOT_RUN MV3:' "$RUNNER_TEMP/tur032-mv3-probe.log"; then
             echo '::notice::Chromium MV3 worker unavailable: NOT_RUN, mock UI success is separate'
           else
             echo '::error::MV3 probe returned without explicit PASS or NOT_RUN evidence'
@@ -68,8 +68,8 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: tur031-linux-real-mv3-locked-alarm-evidence
-          path: ${{ runner.temp }}/tur031-mv3-probe.log
+          name: tur032-linux-real-mv3-locked-restart-evidence
+          path: ${{ runner.temp }}/tur032-mv3-probe.log
           if-no-files-found: warn
           retention-days: 30
   windows-structural:
@@ -87,7 +87,7 @@ jobs:
         shell: pwsh
         run: |
           $tests = @(Get-ChildItem tests/test-*.cjs)
-          if ($tests.Count -ne 93) { throw "Expected 93 Node tests, got $($tests.Count)" }
+          if ($tests.Count -ne 95) { throw "Expected 95 Node tests, got $($tests.Count)" }
           foreach ($test in $tests) { node $test.FullName; if ($LASTEXITCODE -ne 0) { throw "FAIL: $($test.Name)" } }
       - run: python tests/test-package.py
   provenance-archives:
@@ -109,15 +109,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python tools/build-release-artifacts.py --tur TUR031 --out-dir "$RUNNER_TEMP/embasic-tur031"
-          python tools/build-release-artifacts.py --tur TUR031 --out-dir "$RUNNER_TEMP/embasic-tur031-repeat"
-          diff -q "$RUNNER_TEMP/embasic-tur031/SHA256SUMS.txt" "$RUNNER_TEMP/embasic-tur031-repeat/SHA256SUMS.txt"
-          diff -q "$RUNNER_TEMP/embasic-tur031/GitHub_tracked_blob_provenance.json" "$RUNNER_TEMP/embasic-tur031-repeat/GitHub_tracked_blob_provenance.json"
-          (cd "$RUNNER_TEMP/embasic-tur031" && sha256sum -c SHA256SUMS.txt)
+          python tools/build-release-artifacts.py --tur TUR032 --out-dir "$RUNNER_TEMP/embasic-tur032"
+          python tools/build-release-artifacts.py --tur TUR032 --out-dir "$RUNNER_TEMP/embasic-tur032-repeat"
+          diff -q "$RUNNER_TEMP/embasic-tur032/SHA256SUMS.txt" "$RUNNER_TEMP/embasic-tur032-repeat/SHA256SUMS.txt"
+          diff -q "$RUNNER_TEMP/embasic-tur032/GitHub_tracked_blob_provenance.json" "$RUNNER_TEMP/embasic-tur032-repeat/GitHub_tracked_blob_provenance.json"
+          (cd "$RUNNER_TEMP/embasic-tur032" && sha256sum -c SHA256SUMS.txt)
       - name: Save audit artifacts (CI only, not approved release)
         uses: actions/upload-artifact@v4
         with:
-          name: tur031-v1.18.0-source-chrome-sha-gitblobs
-          path: ${{ runner.temp }}/embasic-tur031/
+          name: tur032-v1.18.0-source-chrome-sha-gitblobs
+          path: ${{ runner.temp }}/embasic-tur032/
           if-no-files-found: error
           retention-days: 30
