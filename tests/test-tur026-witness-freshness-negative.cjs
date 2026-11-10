@@ -50,4 +50,52 @@ assert.throws(()=>requireFresh(restored,{authenticated:true,scope,latest:2,diges
 assert.throws(()=>requireFresh(current,{authenticated:true,scope,latest:2,digest:old.record.cipherDigest}),{code:'WITNESS_EQUIVOCATION'});
 assert.throws(()=>requireFresh(current,{authenticated:false,scope,latest:2,digest:current.record.cipherDigest}),{code:'WITNESS_FRESHNESS_UNPROVEN'});
 assert.equal(requireFresh(current,{authenticated:true,scope,latest:2,digest:current.record.cipherDigest}),true);
+
+// TUR027 negative: an in-process "authenticated" boolean is not a cryptographic
+// oracle attestation. A restored old snapshot plus a forged old oracle passes
+// this intentionally weak model. This MUST NOT be used as production acceptance.
+const forgedOldOracle={authenticated:true,scope,latest:1,digest:old.record.cipherDigest};
+assert.equal(requireFresh(restored,forgedOldOracle),true);
+
+// Independent trusted-verifier contract: bind the witness to an immutable owner
+// and vault identity, current nonce, expiration, and signed generation/digest.
+// All assertions below are SYNTHETIC, not an external monotonic server.
+const trustedOwner='synthetic-owner-A';
+const trustedVault='synthetic-vault-A';
+const trustedNonce='fresh-request-nonce-2';
+const trustedTime=1000;
+function requireBoundWitness(snapshot, witness, expected) {
+  const deny=(code)=>{throw Object.assign(new Error(code),{code});};
+  if (!witness || witness.signatureVerified!==true ||
+      witness.owner!==expected.owner || witness.vault!==expected.vault ||
+      witness.nonce!==expected.nonce ||
+      !Number.isSafeInteger(witness.expiresAt) || witness.expiresAt<=expected.now)
+    deny('WITNESS_ATTESTATION_UNPROVEN');
+  if (!Number.isSafeInteger(witness.generation) || witness.generation<0 ||
+      witness.generation!==snapshot.record.generation)
+    deny('WITNESS_STALE');
+  if (witness.digest!==snapshot.record.cipherDigest) deny('WITNESS_EQUIVOCATION');
+  return true;
+}
+const expected={owner:trustedOwner,vault:trustedVault,nonce:trustedNonce,now:trustedTime};
+const good={signatureVerified:true,owner:trustedOwner,vault:trustedVault,
+  nonce:trustedNonce,expiresAt:trustedTime+30,generation:2,digest:current.record.cipherDigest};
+assert.equal(requireBoundWitness(current,good,expected),true);
+for (const patch of [
+  {owner:'synthetic-owner-B'}, {vault:'synthetic-vault-B'},
+  {nonce:'old-nonce'}, {expiresAt:trustedTime},
+  {signatureVerified:false}
+]) {
+  assert.throws(()=>requireBoundWitness(current,{...good,...patch},expected),
+    {code:'WITNESS_ATTESTATION_UNPROVEN'});
+}
+assert.throws(()=>requireBoundWitness(restored,good,expected),{code:'WITNESS_STALE'});
+assert.throws(()=>requireBoundWitness(current,{...good,digest:old.record.cipherDigest},expected),
+  {code:'WITNESS_EQUIVOCATION'});
+// signatureVerified is supplied by a trusted verifier in this *contract only*.
+// A hostile caller can forge it in this model; no real verification occurred.
+assert.equal(requireBoundWitness(restored,{...good,generation:1,
+  digest:old.record.cipherDigest},expected),true);
+console.log('PASS TUR027 oracle flag forgery, owner/vault/nonce/expiry negatives; real witness NOT_RUN');
+
 console.log('PASS TUR026 signed-valid-old AES-GCM rollback negative; external oracle NOT_RUN');

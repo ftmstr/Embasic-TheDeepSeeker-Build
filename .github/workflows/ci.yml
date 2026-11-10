@@ -78,15 +78,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python tools/build-release-artifacts.py --out-dir "$RUNNER_TEMP/embasic-tur026"
-          python tools/build-release-artifacts.py --out-dir "$RUNNER_TEMP/embasic-tur026-repeat"
-          diff -q "$RUNNER_TEMP/embasic-tur026/SHA256SUMS.txt" "$RUNNER_TEMP/embasic-tur026-repeat/SHA256SUMS.txt"
-          diff -q "$RUNNER_TEMP/embasic-tur026/GitHub_tracked_blob_provenance.json" "$RUNNER_TEMP/embasic-tur026-repeat/GitHub_tracked_blob_provenance.json"
-          (cd "$RUNNER_TEMP/embasic-tur026" && sha256sum -c SHA256SUMS.txt)
+          python tools/build-release-artifacts.py --tur TUR027 --out-dir "$RUNNER_TEMP/embasic-tur027"
+          python tools/build-release-artifacts.py --tur TUR027 --out-dir "$RUNNER_TEMP/embasic-tur027-repeat"
+          diff -q "$RUNNER_TEMP/embasic-tur027/SHA256SUMS.txt" "$RUNNER_TEMP/embasic-tur027-repeat/SHA256SUMS.txt"
+          diff -q "$RUNNER_TEMP/embasic-tur027/GitHub_tracked_blob_provenance.json" "$RUNNER_TEMP/embasic-tur027-repeat/GitHub_tracked_blob_provenance.json"
+          (cd "$RUNNER_TEMP/embasic-tur027" && sha256sum -c SHA256SUMS.txt)
       - name: Save audit artifacts (CI only, not approved release)
         uses: actions/upload-artifact@v4
         with:
-          name: tur026-v1.18.0-source-chrome-sha-gitblobs
-          path: ${{ runner.temp }}/embasic-tur026/
+          name: tur027-v1.18.0-source-chrome-sha-gitblobs
+          path: ${{ runner.temp }}/embasic-tur027/
           if-no-files-found: error
           retention-days: 30
