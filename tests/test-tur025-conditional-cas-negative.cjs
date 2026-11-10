@@ -41,6 +41,18 @@ const a={repositoryId:'R_syntheticRepositoryID123',refName:'refs/heads/embasic-f
  await assert.rejects(cas.commit({...a,ownerNonce:'3'.repeat(32)},
    {...d,previousIntent:previous}),{code:'CAS_STALE_INTENT'});
  assert.equal(writes,0);
+ // TUR033: immutable commit verification alone cannot prove the mutable
+ // ref still points to the owner's OID. A second exact-ref read is mandatory.
+ const signed={oid:a.afterOid,message:cas.commitMessage(cas.validate(a))};
+ let raceReads=0;
+ await assert.rejects(cas.observe(cas.validate(a),async name=>({name,oid:++raceReads===1?a.afterOid:'c'.repeat(40)}),async()=>signed),{code:'CAS_REF_MOVED'});
+ assert.equal(raceReads,2);
+ raceReads=0;
+ await assert.rejects(cas.observe(cas.validate(a),async name=>++raceReads===1?{name,oid:a.afterOid}:{name:'refs/heads/other',oid:a.afterOid},async()=>signed),{code:'CAS_REF_UNVERIFIED'});
+ assert.equal(raceReads,2);
+ raceReads=0;
+ const stable=await cas.observe(cas.validate(a),async name=>{raceReads++;return {name,oid:a.afterOid}},async()=>signed);
+ assert.equal(stable.status,'owned');assert.equal(raceReads,2);
  // A post-mutation status check cannot turn a stale writer into authority.
  // Before and after cases require external monotonic witness: NOT_PROVEN.
  console.log('PASS TUR025 fail-closed lease / journal / invalid ref / fake GraphQL receipt; real CAS & witness NOT_RUN');
