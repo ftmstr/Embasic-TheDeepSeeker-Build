@@ -22,7 +22,7 @@ jobs:
         run: |
           set -euo pipefail
           count=$(find tests -maxdepth 1 -name 'test-*.cjs' | wc -l)
-          test "$count" -eq 84
+          test "$count" -eq 85
           for file in tests/test-*.cjs; do node "$file"; done
       - name: Structural Chrome extension tests
         run: python tests/test-package.py
@@ -56,6 +56,37 @@ jobs:
         shell: pwsh
         run: |
           $tests = @(Get-ChildItem tests/test-*.cjs)
-          if ($tests.Count -ne 84) { throw "Expected 84 Node tests, got $($tests.Count)" }
+          if ($tests.Count -ne 85) { throw "Expected 85 Node tests, got $($tests.Count)" }
           foreach ($test in $tests) { node $test.FullName; if ($LASTEXITCODE -ne 0) { throw "FAIL: $($test.Name)" } }
       - run: python tests/test-package.py
+  provenance-archives:
+    name: CI source/Chrome ZIP Git blob and CRC parity (NOT live MV3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - name: Verify canonical PR HEAD (never package synthetic merge)
+        if: github.event_name == 'pull_request'
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify deterministic ZIPs and SHA receipts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/build-release-artifacts.py --out-dir "$RUNNER_TEMP/embasic-tur026"
+          python tools/build-release-artifacts.py --out-dir "$RUNNER_TEMP/embasic-tur026-repeat"
+          diff -q "$RUNNER_TEMP/embasic-tur026/SHA256SUMS.txt" "$RUNNER_TEMP/embasic-tur026-repeat/SHA256SUMS.txt"
+          diff -q "$RUNNER_TEMP/embasic-tur026/GitHub_tracked_blob_provenance.json" "$RUNNER_TEMP/embasic-tur026-repeat/GitHub_tracked_blob_provenance.json"
+          (cd "$RUNNER_TEMP/embasic-tur026" && sha256sum -c SHA256SUMS.txt)
+      - name: Save audit artifacts (CI only, not approved release)
+        uses: actions/upload-artifact@v4
+        with:
+          name: tur026-v1.18.0-source-chrome-sha-gitblobs
+          path: ${{ runner.temp }}/embasic-tur026/
+          if-no-files-found: error
+          retention-days: 30
