@@ -5,7 +5,7 @@ const {harness}=require('./harness.cjs');
   const h=harness();
   await h.listeners.startup();
   let d=await h.route('diagnostics');
-  assert.equal(d.version,'1.17.0');assert.equal(d.deepseekWebAutomation,false);
+  assert.equal(d.version,'1.18.0');assert.equal(d.deepseekWebAutomation,false);
   assert.equal(d.taskCount,null);assert.equal(d.alarmRegistered,true);
   assert.equal(d.alarmPeriodMinutes,1);
   const password='TUR005-synthetic-private-passphrase';
