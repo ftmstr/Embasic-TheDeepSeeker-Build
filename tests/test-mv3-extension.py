@@ -263,7 +263,7 @@ with sync_playwright() as p, TemporaryDirectory() as directory:
                 assert encrypted_before and encrypted_before['data'],'No encrypted vault before locked alarm'
                 assert second_send({'type':'vaultLock'})['ok'],'Cannot lock vault before alarm'
                 locked_diagnostics=second_send({'type':'diagnostics'})
-                assert locked_diagnostics['ok'] and locked_diagnostics['vaultSealed'] and not locked_diagnostics['vaultUnlocked']
+                assert locked_diagnostics['ok'] and locked_diagnostics['data']['vaultSealed'] and not locked_diagnostics['data']['vaultUnlocked']
                 assert not second_send({'type':'snapshot'})['ok'],'Locked MV3 worker leaked protected data'
                 second_boot.evaluate("""async()=>{
                   window.__tur031AlarmSeen=false;
