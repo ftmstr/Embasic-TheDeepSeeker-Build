@@ -38,7 +38,7 @@ No such live provider mutation has been run in TUR027.
 ## Witness fresh monotonicity (NOT LIVE)
 `signatureVerified:true` and `authenticated:true` are attacker-forgeable flags if
 not produced by a trusted verifier. Owner, vault, nonce, expiry, generation, and digest
-binding in `tests/test-tur026-signed-replay.cjs` remains synthetic. A fully signed old
+binding in `tests/test-tur026-witness-freshness-negative.cjs` remains synthetic. A fully signed old
 witness plus old AES-GCM ciphertext can replay unless an independently protected,
 fresh, non-rollbackable generation/digest is verified with trusted key and reliable
 anti-equivocation. Browser storage and a Chrome profile cannot provide that anchor.
