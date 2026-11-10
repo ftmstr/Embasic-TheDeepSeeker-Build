@@ -200,6 +200,56 @@ with sync_playwright() as p, TemporaryDirectory() as directory:
                 assert info['data']['alarmRegistered'] and info['data']['alarmPeriodMinutes']==1,info
                 assert info['data']['uncertainGithubCommits']==0 and info['data']['uncertainDriveCommits']==0,info
                 print('PASS MV3 TUR029 NATIVE ALARM: genuine chrome.alarms dispatch updated durable checkpoint; no duplicate run; physical Windows 24h NOT_RUN')
+            # TUR030: AFTER a native alarm has advanced the encrypted checkpoint,
+            # restart the entire browser again with the SAME disposable profile.
+            # The state must return locked and pending run unique; then a SECOND
+            # genuinely delivered native alarm must advance durable checkpoint.
+            if os.environ.get('EMBASIC_TUR030_RESTART_ALARM','0')=='1':
+                assert os.environ.get('EMBASIC_TUR029_NATIVE_ALARM','0')=='1', 'TUR030 depends on native alarm TUR029 evidence'
+                pre_reboot=resumed_send({'type':'diagnostics'})
+                assert pre_reboot['ok'] and pre_reboot['data']['lastSchedulerAt'],pre_reboot
+                checkpoint_before=pre_reboot['data']['lastSchedulerAt']
+                current_runs=resumed_send({'type':'snapshot'})
+                assert current_runs['ok'] and len(current_runs['data']['runs'])==1,current_runs
+                expected_run_id=current_runs['data']['runs'][0]['id']
+                reopened.close()
+                ctx.close()
+                ctx=p.chromium.launch_persistent_context(
+                  directory,executable_path=chrome_bin,headless=headless,
+                  args=['--no-sandbox','--disable-dev-shm-usage',
+                        f'--disable-extensions-except={extension}',f'--load-extension={extension}'],timeout=18000)
+                second_boot=ctx.new_page()
+                second_boot.goto(f'chrome-extension://{extension_id}/dashboard.html',wait_until='domcontentloaded',timeout=10000)
+                second_send=lambda msg:second_boot.evaluate(send_js,msg)
+                locked_again=second_send({'type':'vaultStatus'})
+                assert locked_again['ok'] and locked_again['data']['sealed'] is True,locked_again
+                assert locked_again['data']['unlocked'] is False,'Sensitive session key persisted across second restart'
+                assert second_send({'type':'snapshot'})['ok'] is False,'Locked vault exposed pending run after restart'
+                assert second_send({'type':'vaultUnlock','password':passphrase})['ok']
+                persisted=second_send({'type':'diagnostics'})
+                assert persisted['ok'] and persisted['data']['alarmRegistered'] is True,persisted
+                assert persisted['data']['lastSchedulerAt']>=checkpoint_before,'Encrypted scheduler checkpoint regressed on restart'
+                pre_alarm=persisted['data']['lastSchedulerAt']
+                second_boot.evaluate("""async () => {
+                    await chrome.alarms.create('embasic-scheduler',{when:Date.now()+2500,periodInMinutes:1});
+                }""")
+                deadline=time.monotonic()+float(os.environ.get('EMBASIC_TUR030_ALARM_TIMEOUT_S','70'))
+                observed=False
+                while time.monotonic()<deadline:
+                    time.sleep(0.7)
+                    checkpoint_now=second_send({'type':'diagnostics'})
+                    assert checkpoint_now['ok'],checkpoint_now
+                    if checkpoint_now['data']['lastSchedulerAt']>pre_alarm:
+                        observed=True
+                        break
+                assert observed,'Second actual native Chrome alarm failed to advance persisted checkpoint'
+                persisted_runs=second_send({'type':'snapshot'})
+                assert persisted_runs['ok'] and len(persisted_runs['data']['runs'])==1,persisted_runs
+                assert persisted_runs['data']['runs'][0]['id']==expected_run_id,'Native alarm created/replaced pending run after restart'
+                assert persisted_runs['data']['runs'][0]['status']=='waiting'
+                assert checkpoint_now['data']['uncertainGithubCommits']==0 and checkpoint_now['data']['uncertainDriveCommits']==0
+                assert checkpoint_now['data']['liveLeases']==0 and checkpoint_now['data']['staleLeases']==0
+                print('PASS MV3 TUR030 RESTART-ALARM: second real Chrome restart clears key, preserves encrypted checkpoint and unique run, second native alarm advances checkpoint, zero leases')
             print('PASS MV3 REAL worker: fresh install, alarm, vault lock/unlock, actual browser restart, no duplicate')
         except Exception as err:
             print('FAIL MV3 REAL worker:',type(err).__name__,str(err)[:350],file=sys.stderr)
