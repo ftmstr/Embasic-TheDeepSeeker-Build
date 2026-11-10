@@ -12,7 +12,7 @@ const api=require('../extension/remote-claim.js');
      if(readBarrier<2){readBarrier++;if(readBarrier===2)release();await gate;}
    }
    return s.request(path,opts);
- },persistIntent:async marker=>posted.push(marker)});
+ },persistIntent:async marker=>posted.push(marker),checkLease:async()=>true});
  const results=await Promise.allSettled([client(a),client(b)]);
  assert.equal(results.filter(x=>x.status==='fulfilled').length,1);
  assert.equal(results.filter(x=>x.status==='rejected').length,1);

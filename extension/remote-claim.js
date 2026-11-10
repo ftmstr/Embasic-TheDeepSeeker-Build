@@ -49,7 +49,7 @@
     if(typeof checkLease!=='function'||await checkLease()!==true)
       throw fail('CLAIM_LEASE_DENIED','A current positive lease/fence decision is required.');
   }
-  async function acquire(raw,{request,persistIntent,checkLease=async()=>true,previousIntent=null}={}){
+  async function acquire(raw,{request,persistIntent,checkLease,previousIntent=null}={}){
     const claim=validate(raw);
     if(typeof request!=='function'||typeof persistIntent!=='function')
       throw fail('CLAIM_MISSING_DEPENDENCY','Remote claim requires provider read/write and durable encrypted journal.');
@@ -81,7 +81,7 @@
       'Successful POST receipt without remote readback is not write authority.');
     await requireLease(checkLease);return verified;
   }
-  async function verifyBeforeWrite(raw,{request,checkLease=async()=>true}={}){
+  async function verifyBeforeWrite(raw,{request,checkLease}={}){
     const claim=validate(raw);await requireLease(checkLease);
     const verified=await observe(claim,request);
     if(verified.status!=='owned')throw fail('CLAIM_NOT_VISIBLE','Claim is not visible; deny remote mutation.');
