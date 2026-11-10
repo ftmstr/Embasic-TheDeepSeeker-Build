@@ -75,7 +75,7 @@ def make_zip(target: Path, entries: list[tuple[str, bytes, int, str]], chrome: b
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out-dir", required=True, type=Path)
-    ap.add_argument("--tur", required=True, choices=["TUR026", "TUR027"],
+    ap.add_argument("--tur", required=True, choices=["TUR026", "TUR027", "TUR028"],
                     help="Exact independently verified round ID; never silently relabel an archive.")
     args = ap.parse_args()
     out_dir = args.out_dir.resolve()

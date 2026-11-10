@@ -22,7 +22,7 @@ jobs:
         run: |
           set -euo pipefail
           count=$(find tests -maxdepth 1 -name 'test-*.cjs' | wc -l)
-          test "$count" -eq 85
+          test "$count" -eq 86
           for file in tests/test-*.cjs; do node "$file"; done
       - name: Structural Chrome extension tests
         run: python tests/test-package.py
@@ -41,6 +41,37 @@ jobs:
           CHROMIUM_PATH="$(python -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()')"
           export CHROMIUM_PATH
           python tests/test-ui-smoke.py
+      - name: Probe genuine unpacked Chromium MV3 worker (Linux CI; not physical Windows)
+        shell: bash
+        run: |
+          set -euo pipefail
+          CHROMIUM_PATH="$(python -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()')"
+          export CHROMIUM_PATH EMBASIC_HEADLESS=1 EMBASIC_REQUIRE_MV3=0 EMBASIC_MV3_WAIT_MS=7000
+          set +e
+          timeout --signal=TERM --kill-after=5s 55s python -u tests/test-mv3-extension.py 2>&1 | tee "$RUNNER_TEMP/tur028-mv3-probe.log"
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+            printf 'NOT_RUN: Linux MV3 probe timed out (not PASS).\n' | tee -a "$RUNNER_TEMP/tur028-mv3-probe.log"
+            echo '::notice::Real MV3 CI probe NOT_RUN due to timeout; no physical Windows evidence'
+          elif [ "$rc" -ne 0 ]; then
+            echo '::error::Genuine MV3 worker assertion failed; see log'
+            exit "$rc"
+          elif grep -q '^PASS MV3 REAL worker:' "$RUNNER_TEMP/tur028-mv3-probe.log"; then
+            echo '::notice::Linux Chromium MV3 real-worker probe PASSED; physical Windows still NOT_RUN'
+          elif grep -q '^NOT_RUN MV3:' "$RUNNER_TEMP/tur028-mv3-probe.log"; then
+            echo '::notice::Chromium MV3 worker unavailable: NOT_RUN, mock UI success is separate'
+          else
+            echo '::error::MV3 probe returned without explicit PASS or NOT_RUN evidence'
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tur028-linux-real-mv3-probe-evidence
+          path: ${{ runner.temp }}/tur028-mv3-probe.log
+          if-no-files-found: warn
+          retention-days: 30
   windows-structural:
     name: Windows Node and manifest (no physical MV3)
     runs-on: windows-latest
@@ -56,7 +87,7 @@ jobs:
         shell: pwsh
         run: |
           $tests = @(Get-ChildItem tests/test-*.cjs)
-          if ($tests.Count -ne 85) { throw "Expected 85 Node tests, got $($tests.Count)" }
+          if ($tests.Count -ne 86) { throw "Expected 86 Node tests, got $($tests.Count)" }
           foreach ($test in $tests) { node $test.FullName; if ($LASTEXITCODE -ne 0) { throw "FAIL: $($test.Name)" } }
       - run: python tests/test-package.py
   provenance-archives:
@@ -78,15 +109,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python tools/build-release-artifacts.py --tur TUR027 --out-dir "$RUNNER_TEMP/embasic-tur027"
-          python tools/build-release-artifacts.py --tur TUR027 --out-dir "$RUNNER_TEMP/embasic-tur027-repeat"
-          diff -q "$RUNNER_TEMP/embasic-tur027/SHA256SUMS.txt" "$RUNNER_TEMP/embasic-tur027-repeat/SHA256SUMS.txt"
-          diff -q "$RUNNER_TEMP/embasic-tur027/GitHub_tracked_blob_provenance.json" "$RUNNER_TEMP/embasic-tur027-repeat/GitHub_tracked_blob_provenance.json"
-          (cd "$RUNNER_TEMP/embasic-tur027" && sha256sum -c SHA256SUMS.txt)
+          python tools/build-release-artifacts.py --tur TUR028 --out-dir "$RUNNER_TEMP/embasic-tur028"
+          python tools/build-release-artifacts.py --tur TUR028 --out-dir "$RUNNER_TEMP/embasic-tur028-repeat"
+          diff -q "$RUNNER_TEMP/embasic-tur028/SHA256SUMS.txt" "$RUNNER_TEMP/embasic-tur028-repeat/SHA256SUMS.txt"
+          diff -q "$RUNNER_TEMP/embasic-tur028/GitHub_tracked_blob_provenance.json" "$RUNNER_TEMP/embasic-tur028-repeat/GitHub_tracked_blob_provenance.json"
+          (cd "$RUNNER_TEMP/embasic-tur028" && sha256sum -c SHA256SUMS.txt)
       - name: Save audit artifacts (CI only, not approved release)
         uses: actions/upload-artifact@v4
         with:
-          name: tur027-v1.18.0-source-chrome-sha-gitblobs
-          path: ${{ runner.temp }}/embasic-tur027/
+          name: tur028-v1.18.0-source-chrome-sha-gitblobs
+          path: ${{ runner.temp }}/embasic-tur028/
           if-no-files-found: error
           retention-days: 30
