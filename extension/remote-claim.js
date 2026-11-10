@@ -46,7 +46,12 @@
     return {status:'owned',ref:refFor(claim),sha};
   }
   async function requireLease(checkLease){
-    if(typeof checkLease!=='function'||await checkLease()!==true)
+    if(typeof checkLease!=='function')
+      throw fail('CLAIM_LEASE_DENIED','A current positive lease/fence decision is required.');
+    let decision;
+    try { decision=await checkLease(); }
+    catch (_) { throw fail('CLAIM_LEASE_DENIED','Lease checker failed; remote authority is denied.'); }
+    if(decision!==true)
       throw fail('CLAIM_LEASE_DENIED','A current positive lease/fence decision is required.');
   }
   async function acquire(raw,{request,persistIntent,checkLease,previousIntent=null}={}){

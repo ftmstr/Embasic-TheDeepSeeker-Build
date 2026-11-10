@@ -11,7 +11,7 @@ const {githubServer}=require('./tur017-mock-github.cjs');
     assert.equal(s.stats.post,0);
   }
   const s=githubServer(),c=s.claim();
-  await assert.rejects(api.acquire(c,{request:s.request,persistIntent:async()=>true,checkLease:()=>{throw Error('fenced');}}),/fenced/);
+  await assert.rejects(api.acquire(c,{request:s.request,persistIntent:async()=>true,checkLease:()=>{throw Error('fenced');}}),{code:'CLAIM_LEASE_DENIED'});
   assert.equal(s.stats.post,0);
   console.log('PASS TUR018 non-boolean lease decisions fail closed before remote mutation');
 })().catch(e=>{console.error(e);process.exitCode=1});
