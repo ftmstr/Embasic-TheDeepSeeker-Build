@@ -20,5 +20,18 @@ const api=require('../extension/remote-claim.js');
  assert.equal(s.stats.post,2,'two independent clients attempted one server-enforced create each');
  assert.equal(s.refs.size,1,'only ONE claimant may own the unique remote ref');
  assert.equal(posted.length,2,'both writers persisted uncertainty BEFORE attempting POST');
+ // TUR021 NEGATIVE ACCEPTANCE: a successful create-only claim does not fence
+ // a later, independent GitHub branch PUT. This is a deliberately unguarded
+ // synthetic provider, NOT a live GitHub API or a production integration.
+ const winner=results.find(x=>x.status==='fulfilled');
+ assert.equal(winner.value.status,'owned');
+ const branchState={sha:'a'.repeat(40),putCount:0};
+ const unsafePut=async nextSha=>{branchState.sha=nextSha;branchState.putCount++;};
+ await unsafePut('b'.repeat(40)); // unrelated profile changes branch after claim
+ await unsafePut('c'.repeat(40)); // claimant can overwrite without provider CAS
+ assert.equal(branchState.putCount,2);
+ assert.equal(branchState.sha,'c'.repeat(40));
+ assert.equal(s.refs.size,1,'claim remains unique while branch writes race');
+ console.log('PASS TUR021 NEGATIVE synthetic branch PUT race: unique create-ref does NOT enforce later branch fencing; live provider NOT_RUN, PRODUCTION_NO_GO');
  console.log('PASS TUR017 two independent device-like claimants: one GitHub create-ref winner, loser fail-closed; MOCK server, live NOT_RUN');
 })().catch(e=>{console.error(e);process.exitCode=1});
