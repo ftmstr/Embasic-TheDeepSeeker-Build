@@ -17,6 +17,19 @@ const {githubServer}=require('./tur017-mock-github.cjs');
       {code:'CLAIM_LEASE_DENIED'});
     assert.equal(calls,0,'absent checkLease may not fetch remote metadata');
   }
+  // TUR023: rejected or throwing lease callback must deny provider access and
+  // normalize the error, without leaking a provider read or durable intent.
+  for (const checker of [()=>{throw Error('synthetic lease outage');},
+    async()=>{throw Error('synthetic async lease outage');}]) {
+    const server=githubServer(),claim=server.claim();let calls=0,intents=0;
+    await assert.rejects(api.acquire(claim,{
+      request:async(...args)=>{calls++;return server.request(...args);},
+      persistIntent:async()=>{intents++;},checkLease:checker
+    }),{code:'CLAIM_LEASE_DENIED'});
+    assert.equal(calls,0,'throwing lease checker must not access provider');
+    assert.equal(intents,0,'throwing lease checker must not persist intent');
+    assert.equal(server.stats.post,0);
+  }
   // A valid checker permits the initial read, but a lease revoked DURING that
   // read must deny all subsequent mutation even if the provider says unknown.
   const s=githubServer(),c=s.claim();let valid=true,reads=0,writes=0;
