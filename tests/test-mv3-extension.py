@@ -272,7 +272,14 @@ with sync_playwright() as p, TemporaryDirectory() as directory:
                   });
                   await chrome.alarms.create('embasic-scheduler',{when:Date.now()+2500,periodInMinutes:1});
                 }""")
-                second_boot.wait_for_function('window.__tur031AlarmSeen === true',timeout=30000)
+                alarm_seen=False
+                locked_alarm_deadline=time.monotonic()+30
+                while time.monotonic()<locked_alarm_deadline:
+                    second_boot.wait_for_timeout(400)
+                    if second_boot.evaluate('() => window.__tur031AlarmSeen === true'):
+                        alarm_seen=True
+                        break
+                assert alarm_seen,'Native Chrome alarm was not observed by extension-page alarm listener'
                 second_boot.wait_for_timeout(450)
                 encrypted_locked=second_boot.evaluate("""async ()=>(await chrome.storage.local.get('embasicSealedStateV3')).embasicSealedStateV3""")
                 assert encrypted_locked==encrypted_before,'Native alarm rewrote ciphertext while vault was locked'
