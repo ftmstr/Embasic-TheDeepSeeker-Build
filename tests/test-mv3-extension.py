@@ -8,7 +8,7 @@ Runs only synthetic local data, does not connect to GitHub/Drive/DeepSeek.
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.parse import urlparse
-import os, sys
+import os, sys, time
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
 extension=Path(__file__).resolve().parents[1]/'extension'
@@ -136,6 +136,70 @@ with sync_playwright() as p, TemporaryDirectory() as directory:
             restarted_diag=resumed_send({'type':'diagnostics'})
             assert restarted_diag['ok'] and restarted_diag['data']['alarmRegistered'] is True,restarted_diag
             assert restarted_diag['data']['uncertainDriveCommits']==0,restarted_diag
+            # TUR029: two genuinely separate persistent Chrome profiles do NOT
+            # share a vault or Web Locks namespace, even when the extension ID
+            # is the same. This is a NEGATIVE boundary, not cross-profile CAS.
+            if os.environ.get('EMBASIC_TUR029_PROFILE_PROBE','0')=='1':
+                with TemporaryDirectory() as independent_dir:
+                    separate=p.chromium.launch_persistent_context(
+                      independent_dir, executable_path=chrome_bin,headless=headless,
+                      args=['--no-sandbox','--disable-dev-shm-usage',
+                            f'--disable-extensions-except={extension}',f'--load-extension={extension}'],
+                      timeout=18000)
+                    try:
+                        independent_workers=separate.service_workers
+                        if not independent_workers:
+                            independent_workers=[separate.wait_for_event('serviceworker',timeout=worker_wait_ms)]
+                        independent_worker=next((w for w in independent_workers if w.url.endswith('/background.js') and w.url.startswith('chrome-extension://')),None)
+                        assert independent_worker is not None,'Second real profile MV3 worker unavailable'
+                        second_id=urlparse(independent_worker.url).netloc
+                        independent_page=separate.new_page()
+                        independent_page.goto(f'chrome-extension://{second_id}/dashboard.html',wait_until='domcontentloaded',timeout=10000)
+                        fresh=independent_page.evaluate(send_js,{'type':'vaultStatus'})
+                        assert fresh['ok'] and fresh['data']['required'] is True,fresh
+                        assert fresh['data']['sealed'] is False,'Independent Chrome profile inherited first profile vault'
+                        first_view=resumed_send({'type':'vaultStatus'})
+                        assert first_view['ok'] and first_view['data']['sealed'] is True
+                        reopened.evaluate("""() => {window.__tur029Held=false;window.__tur029Release=null;
+                          navigator.locks.request('embasic-tur029-independent-profiles',async ()=>{
+                            window.__tur029Held=true;
+                            await new Promise(resolve=>window.__tur029Release=resolve);
+                          });} """)
+                        reopened.wait_for_function('window.__tur029Held === true',timeout=5000)
+                        independent_page.evaluate("""() => {window.__tur029OtherHeld=false;
+                          navigator.locks.request('embasic-tur029-independent-profiles',async ()=>{
+                            window.__tur029OtherHeld=true;
+                          });} """)
+                        independent_page.wait_for_function('window.__tur029OtherHeld === true',timeout=5000)
+                        reopened.evaluate('window.__tur029Release()')
+                        independent_page.close()
+                        print('PASS MV3 TUR029: two real Chrome profiles have isolated vault and Web Locks; cross-profile CAS NOT_PROVEN')
+                    finally:
+                        separate.close()
+            # TUR029: real native chrome.alarms dispatch, not schedulerNow.
+            # Optional (CI) because Chrome may impose a >=30s alarm floor.
+            if os.environ.get('EMBASIC_TUR029_NATIVE_ALARM','0')=='1':
+                before_tick=resumed_send({'type':'diagnostics'})['data']['lastSchedulerAt']
+                assert before_tick,'No persisted scheduler checkpoint before genuine alarm'
+                reopened.evaluate("""async () => {
+                  await chrome.alarms.create('embasic-scheduler',{
+                    when:Date.now()+2500,periodInMinutes:1});
+                }""")
+                cap=float(os.environ.get('EMBASIC_TUR029_ALARM_TIMEOUT_S','65'))
+                observed=False; deadline=time.monotonic()+cap
+                while time.monotonic()<deadline:
+                    time.sleep(0.8)
+                    info=resumed_send({'type':'diagnostics'})
+                    assert info['ok'],info
+                    if info['data']['lastSchedulerAt']!=before_tick:
+                        observed=True;break
+                assert observed,f'Native Chrome alarm did not advance persisted scheduler checkpoint within {cap}s'
+                after_alarm=resumed_send({'type':'snapshot'})
+                assert after_alarm['ok'] and len(after_alarm['data']['runs'])==1,'Real alarm duplicated or erased waiting run'
+                assert after_alarm['data']['runs'][0]['status']=='waiting','Native alarm unexpectedly executed a synthetic waiting run'
+                assert info['data']['alarmRegistered'] and info['data']['alarmPeriodMinutes']==1,info
+                assert info['data']['uncertainGithubCommits']==0 and info['data']['uncertainDriveCommits']==0,info
+                print('PASS MV3 TUR029 NATIVE ALARM: genuine chrome.alarms dispatch updated durable checkpoint; no duplicate run; physical Windows 24h NOT_RUN')
             print('PASS MV3 REAL worker: fresh install, alarm, vault lock/unlock, actual browser restart, no duplicate')
         except Exception as err:
             print('FAIL MV3 REAL worker:',type(err).__name__,str(err)[:350],file=sys.stderr)
