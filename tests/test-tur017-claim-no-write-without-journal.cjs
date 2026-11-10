@@ -6,7 +6,7 @@ const api=require('../extension/remote-claim.js');
  const s=githubServer(),c=s.claim();
  await assert.rejects(api.acquire(c,{request:s.request,persistIntent:async()=>{throw Error('storage write failure');},checkLease:async()=>true}),/storage write failure/);
  assert.equal(s.stats.post,0);
- await assert.rejects(api.acquire(c,{request:s.request,checkLease:async()=>{throw Error('lease fenced');},persistIntent:async()=>true}),/lease fenced/);
+ await assert.rejects(api.acquire(c,{request:s.request,checkLease:async()=>{throw Error('lease fenced');},persistIntent:async()=>true}),{code:'CLAIM_LEASE_DENIED'});
  assert.equal(s.stats.post,0);
  await assert.rejects(api.acquire({...c,ownerNonce:'invalid'},{request:s.request,persistIntent:async()=>true,checkLease:async()=>true}),{code:'CLAIM_INVALID'});
  assert.equal(s.stats.post,0);
