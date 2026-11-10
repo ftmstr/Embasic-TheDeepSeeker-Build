@@ -42,6 +42,13 @@
       const c=await verifyCommit(oid);
       if(!c||c.oid!==s.afterOid||c.message!==commitMessage(s))
         throw fail('CAS_COMMIT_UNVERIFIED','Immutable commit must bind owner, ref, parent, and digest.');
+      // An immutable commit proves identity, not that the mutable ref still
+      // points at it. Re-read the exact ref after commit verification to
+      // close the observable GET(ref) -> GET(commit) -> ref-move window.
+      // This is only a detection gate, NOT a global linearizable snapshot.
+      const confirmed=parseRef(await readRef(s.refName),s);
+      if(confirmed!==s.afterOid)
+        throw fail('CAS_REF_MOVED','Ref moved during immutable owner verification; deny stale ownership.');
       return {status:'owned',ref:s.refName,oid};
     }
     if(oid===s.beforeOid)return {status:'old',ref:s.refName,oid};
