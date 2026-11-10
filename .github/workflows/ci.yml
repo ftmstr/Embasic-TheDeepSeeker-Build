@@ -87,7 +87,7 @@ jobs:
         shell: pwsh
         run: |
           $tests = @(Get-ChildItem tests/test-*.cjs)
-          if ($tests.Count -ne 88) { throw "Expected 90 Node tests, got $($tests.Count)" }
+          if ($tests.Count -ne 90) { throw "Expected 90 Node tests, got $($tests.Count)" }
           foreach ($test in $tests) { node $test.FullName; if ($LASTEXITCODE -ne 0) { throw "FAIL: $($test.Name)" } }
       - run: python tests/test-package.py
   provenance-archives:
