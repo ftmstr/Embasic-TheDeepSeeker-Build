@@ -1,4 +1,4 @@
-# EMBASIC TheDeepSeeker v1.16.0 — TUR017
+# EMBASIC TheDeepSeeker v1.18.0 — TUR025
 
 **PC_TEST_CANDIDATE / PRODUCTION_NO_GO.** Kanonik Public GitHub `ftmstr/Embasic-TheDeepSeeker-Build` TUR016 Draft PR #5 (`ca6e95e80b9f1de4659e0cdcffb48d71a04c4e14`) üzerine ayrı stacked tur. `main` merge/deploy yok. DeepSeek Free insansız web sohbet otomasyonu yok.
 

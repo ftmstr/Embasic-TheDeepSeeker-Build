@@ -38,7 +38,7 @@ with sync_playwright() as p, TemporaryDirectory() as directory:
             sys.exit(1 if strict else 0)
         try:
             version=worker.evaluate('() => chrome.runtime.getManifest().version')
-            assert version=='1.17.0',f'Unexpected manifest version: {version}'
+            assert version=='1.18.0',f'Unexpected manifest version: {version}'
             # Real Chrome worker, not a Web Locks polyfill or DOM mock. Absence
             # must fail physical acceptance: independent state contexts would
             # be left with merely advisory optimistic fencing.
