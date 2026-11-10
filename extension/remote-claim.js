@@ -55,6 +55,11 @@
       throw fail('CLAIM_MISSING_DEPENDENCY','Remote claim requires provider read/write and durable encrypted journal.');
     if(previousIntent && !same(claim,previousIntent))
       throw fail('CLAIM_STALE_INTENT','A durable claim exists for another owner or report digest.');
+    // TUR022: A denied/missing lease must not authorize even an initial remote
+    // provider read. The prior order observed first and fenced only on return,
+    // allowing a stale worker to disclose provider metadata/usage to a revoked
+    // local context. This is a local authorization gate, NOT distributed CAS.
+    await requireLease(checkLease);
     // Reconcile before creating. A remote ref may already exist for this run.
     const first=await observe(claim,request);
     if(first.status==='owned'){await requireLease(checkLease);return first;}
