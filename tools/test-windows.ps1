@@ -4,7 +4,7 @@ Set-Location (Split-Path -Parent $PSScriptRoot)
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw 'Node.js 20+ bulunamadı.' }
 if (-not (Get-Command python -ErrorAction SilentlyContinue)) { throw 'Python bulunamadı.' }
 $tests = @(Get-ChildItem -Path tests -Filter 'test-*.cjs' -File | Sort-Object Name)
-if ($tests.Count -ne 84) { throw "Test sayısı 84 yerine $($tests.Count) çıktı; beklenmeyen değişiklik." }
+if ($tests.Count -ne 85) { throw "Test sayısı 85 yerine $($tests.Count) çıktı; beklenmeyen değişiklik." }
 foreach ($test in $tests) {
     & node $test.FullName
     if ($LASTEXITCODE -ne 0) { throw "FAIL: $($test.Name)" }
@@ -13,6 +13,6 @@ foreach ($test in $tests) {
 if ($LASTEXITCODE -ne 0) { throw 'FAIL: package checks' }
 & python tests/test-ui-smoke.py
 if ($LASTEXITCODE -ne 0) { throw 'FAIL: simulated Chromium UI' }
-Write-Host 'PASS: 84 Node + 1 package + 1 simulated Chromium UI = 86 LOCAL groups.'
+Write-Host 'PASS: 85 Node + 1 package + 1 simulated Chromium UI = 87 LOCAL groups.'
 Write-Host 'NOT_RUN: real MV3 worker, physical Windows sleep/wake, live OAuth/GitHub/Drive.'
 Write-Host 'Real MV3: powershell -ExecutionPolicy Bypass -File tools/test-mv3-windows.ps1'
