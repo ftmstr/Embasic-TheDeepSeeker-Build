@@ -25,7 +25,9 @@ jobs:
           test "$count" -eq 95
           for file in tests/test-*.cjs; do node "$file"; done
       - name: Structural Chrome extension tests
-        run: python tests/test-package.py
+        run: |
+          python tests/test-package.py
+          python tests/test-release-turn.py
   simulated-chromium-ui:
     name: Mocked Chromium UI only (not real MV3)
     runs-on: ubuntu-latest
@@ -41,6 +43,17 @@ jobs:
           CHROMIUM_PATH="$(python -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()')"
           export CHROMIUM_PATH
           python tests/test-ui-smoke.py
+      - name: Resolve evidence branch label (not a production attestation)
+        id: evidence-label
+        shell: bash
+        env:
+          SOURCE_BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          if [[ "$SOURCE_BRANCH" =~ ^tur([0-9]{3,})/ ]]; then
+            echo "label=tur${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+          else
+            echo 'label=unscoped' >> "$GITHUB_OUTPUT"
+          fi
       - name: Probe genuine unpacked Chromium MV3 worker (Linux CI; not physical Windows)
         shell: bash
         run: |
@@ -68,7 +81,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: tur032-linux-real-mv3-locked-restart-evidence
+          name: ${{ steps.evidence-label.outputs.label }}-linux-real-mv3-locked-restart-evidence
           path: ${{ runner.temp }}/tur032-mv3-probe.log
           if-no-files-found: warn
           retention-days: 30
@@ -90,13 +103,28 @@ jobs:
           if ($tests.Count -ne 95) { throw "Expected 95 Node tests, got $($tests.Count)" }
           foreach ($test in $tests) { node $test.FullName; if ($LASTEXITCODE -ne 0) { throw "FAIL: $($test.Name)" } }
       - run: python tests/test-package.py
+      - run: python tests/test-release-turn.py
   provenance-archives:
     name: CI source/Chrome ZIP Git blob and CRC parity (NOT live MV3)
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'tur')
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Resolve and validate exact TUR branch
+        id: turn
+        shell: bash
+        env:
+          SOURCE_BRANCH: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$SOURCE_BRANCH" =~ ^tur([0-9]{3,})/ ]]; then
+            echo '::error::Cannot derive exact TUR from PR head branch'
+            exit 1
+          fi
+          echo "tur=TUR${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+          echo "branch=$SOURCE_BRANCH" >> "$GITHUB_OUTPUT"
       - name: Verify canonical PR HEAD (never package synthetic merge)
         if: github.event_name == 'pull_request'
         env:
@@ -109,15 +137,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python tools/build-release-artifacts.py --tur TUR032 --out-dir "$RUNNER_TEMP/embasic-tur032"
-          python tools/build-release-artifacts.py --tur TUR032 --out-dir "$RUNNER_TEMP/embasic-tur032-repeat"
-          diff -q "$RUNNER_TEMP/embasic-tur032/SHA256SUMS.txt" "$RUNNER_TEMP/embasic-tur032-repeat/SHA256SUMS.txt"
-          diff -q "$RUNNER_TEMP/embasic-tur032/GitHub_tracked_blob_provenance.json" "$RUNNER_TEMP/embasic-tur032-repeat/GitHub_tracked_blob_provenance.json"
-          (cd "$RUNNER_TEMP/embasic-tur032" && sha256sum -c SHA256SUMS.txt)
+          TUR="${{ steps.turn.outputs.tur }}"
+          BRANCH="${{ steps.turn.outputs.branch }}"
+          python tools/build-release-artifacts.py --tur "$TUR" --branch "$BRANCH" --out-dir "$RUNNER_TEMP/embasic-current"
+          python tools/build-release-artifacts.py --tur "$TUR" --branch "$BRANCH" --out-dir "$RUNNER_TEMP/embasic-repeat"
+          diff -q "$RUNNER_TEMP/embasic-current/SHA256SUMS.txt" "$RUNNER_TEMP/embasic-repeat/SHA256SUMS.txt"
+          diff -q "$RUNNER_TEMP/embasic-current/GitHub_tracked_blob_provenance.json" "$RUNNER_TEMP/embasic-repeat/GitHub_tracked_blob_provenance.json"
+          (cd "$RUNNER_TEMP/embasic-current" && sha256sum -c SHA256SUMS.txt)
       - name: Save audit artifacts (CI only, not approved release)
         uses: actions/upload-artifact@v4
         with:
-          name: tur032-v1.18.0-source-chrome-sha-gitblobs
-          path: ${{ runner.temp }}/embasic-tur032/
+          name: ${{ steps.turn.outputs.tur }}-v1.18.0-source-chrome-sha-gitblobs
+          path: ${{ runner.temp }}/embasic-current/
           if-no-files-found: error
           retention-days: 30
