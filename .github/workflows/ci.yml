@@ -28,6 +28,7 @@ jobs:
         run: |
           python tests/test-package.py
           python tests/test-release-turn.py
+          python tests/test-mv3-ci-gate.py
   simulated-chromium-ui:
     name: Mocked Chromium UI only (not real MV3)
     runs-on: ubuntu-latest
@@ -59,25 +60,14 @@ jobs:
         run: |
           set -euo pipefail
           CHROMIUM_PATH="$(python -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()')"
-          export CHROMIUM_PATH EMBASIC_HEADLESS=1 EMBASIC_REQUIRE_MV3=0 EMBASIC_MV3_WAIT_MS=9000 EMBASIC_TUR029_PROFILE_PROBE=1 EMBASIC_TUR029_NATIVE_ALARM=1 EMBASIC_TUR029_ALARM_TIMEOUT_S=70 EMBASIC_TUR030_RESTART_ALARM=1 EMBASIC_TUR030_ALARM_TIMEOUT_S=70 EMBASIC_TUR031_LOCKED_ALARM=1 EMBASIC_TUR031_ALARM_TIMEOUT_S=70 EMBASIC_TUR032_LOCKED_RESTART=1 EMBASIC_TUR032_ALARM_TIMEOUT_S=70
+          export CHROMIUM_PATH EMBASIC_HEADLESS=1 EMBASIC_REQUIRE_MV3=1 EMBASIC_MV3_WAIT_MS=9000 EMBASIC_TUR029_PROFILE_PROBE=1 EMBASIC_TUR029_NATIVE_ALARM=1 EMBASIC_TUR029_ALARM_TIMEOUT_S=70 EMBASIC_TUR030_RESTART_ALARM=1 EMBASIC_TUR030_ALARM_TIMEOUT_S=70 EMBASIC_TUR031_LOCKED_ALARM=1 EMBASIC_TUR031_ALARM_TIMEOUT_S=70 EMBASIC_TUR032_LOCKED_RESTART=1 EMBASIC_TUR032_ALARM_TIMEOUT_S=70
           set +e
           timeout --signal=TERM --kill-after=5s 360s python -u tests/test-mv3-extension.py 2>&1 | tee "$RUNNER_TEMP/tur032-mv3-probe.log"
           rc=${PIPESTATUS[0]}
           set -e
-          if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
-            printf 'NOT_RUN: Linux MV3 probe timed out (not PASS).\n' | tee -a "$RUNNER_TEMP/tur032-mv3-probe.log"
-            echo '::notice::Real TUR032 Chrome locked restart/alarms MV3 probe NOT_RUN due to timeout; no physical Windows evidence'
-          elif [ "$rc" -ne 0 ]; then
-            echo '::error::Genuine MV3 worker assertion failed; see log'
-            exit "$rc"
-          elif grep -q '^PASS MV3 REAL worker:' "$RUNNER_TEMP/tur032-mv3-probe.log" && grep -q '^PASS MV3 TUR029: two real Chrome profiles' "$RUNNER_TEMP/tur032-mv3-probe.log" && grep -q '^PASS MV3 TUR029 NATIVE ALARM:' "$RUNNER_TEMP/tur032-mv3-probe.log" && grep -q '^PASS MV3 TUR030 RESTART-ALARM:' "$RUNNER_TEMP/tur032-mv3-probe.log" && grep -q '^PASS MV3 TUR031 LOCKED-ALARM:' "$RUNNER_TEMP/tur032-mv3-probe.log" && grep -q '^PASS MV3 TUR031 UNLOCK-ALARM:' "$RUNNER_TEMP/tur032-mv3-probe.log" && grep -q '^PASS MV3 TUR032 LOCKED-RESTART:' "$RUNNER_TEMP/tur032-mv3-probe.log" && grep -q '^PASS MV3 TUR032 RESTART-UNLOCK-ALARM:' "$RUNNER_TEMP/tur032-mv3-probe.log"; then
-            echo '::notice::TUR032 Linux Chromium genuine MV3 sealed restart and real native alarm checkpoints PASSED; physical Windows/24h still NOT_RUN'
-          elif grep -q '^NOT_RUN MV3:' "$RUNNER_TEMP/tur032-mv3-probe.log"; then
-            echo '::notice::Chromium MV3 worker unavailable: NOT_RUN, mock UI success is separate'
-          else
-            echo '::error::MV3 probe returned without explicit PASS or NOT_RUN evidence'
-            exit 1
-          fi
+          # A green CI job must never hide timeout, NOT_RUN, missing evidence,
+          # duplicate checkpoints, or a failed probe behind the mocked UI.
+          python tools/verify-mv3-ci-evidence.py --log "$RUNNER_TEMP/tur032-mv3-probe.log" --exit-code "$rc"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -104,6 +94,7 @@ jobs:
           foreach ($test in $tests) { node $test.FullName; if ($LASTEXITCODE -ne 0) { throw "FAIL: $($test.Name)" } }
       - run: python tests/test-package.py
       - run: python tests/test-release-turn.py
+      - run: python tests/test-mv3-ci-gate.py
   provenance-archives:
     name: CI source/Chrome ZIP Git blob and CRC parity (NOT live MV3)
     runs-on: ubuntu-latest
