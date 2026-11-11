@@ -36,10 +36,11 @@ def capture(probe: Path, output: Path, timeout: float, cwd: Path = ROOT) -> None
     if output.is_symlink():
         raise ValueError('Refuse symlink evidence destination')
     output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(prefix='.mv3-child-', suffix='.raw',
-                                     dir=output.parent, delete=False) as file:
-        scratch = Path(file.name)
-        try:
+    scratch = None
+    try:
+        with tempfile.NamedTemporaryFile(prefix='.mv3-child-', suffix='.raw',
+                                         dir=output.parent, delete=False) as file:
+            scratch = Path(file.name)
             command = [sys.executable, '-u', str(probe)]
             process = subprocess.Popen(command, cwd=cwd, stdout=file,
                                        stderr=subprocess.STDOUT, start_new_session=True)
@@ -62,14 +63,15 @@ def capture(probe: Path, output: Path, timeout: float, cwd: Path = ROOT) -> None
             raw = scratch.read_bytes()
             # Reject before publishing anything to a shared upload path.
             gate.verify(raw, returncode)
-            if output.is_symlink():
-                raise ValueError('Evidence destination changed into symlink')
-            os.replace(scratch, output)
-            print(f'PASS MV3 DIRECT CHILD: exit=0, bytes={len(raw)}, no shell tee; '
-                  'process origin NOT CRYPTOGRAPHICALLY PROVEN')
-        finally:
-            if scratch.exists():
-                scratch.unlink()
+        if output.is_symlink():
+            raise ValueError('Evidence destination changed into symlink')
+        os.replace(scratch, output)
+        print(f'PASS MV3 DIRECT CHILD: exit=0, bytes={len(raw)}, no shell tee; '
+              'process origin NOT CRYPTOGRAPHICALLY PROVEN')
+
+    finally:
+        if scratch is not None and scratch.exists():
+            scratch.unlink()
 
 
 def main() -> int:

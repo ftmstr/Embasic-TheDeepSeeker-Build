@@ -72,7 +72,10 @@ class ChildOriginCapture(unittest.TestCase):
     def test_symlink_destination_rejected_without_writing(self):
         target = self.root/'sensitive'
         target.write_text('untouched')
-        self.log.symlink_to(target)
+        try:
+            self.log.symlink_to(target)
+        except OSError:
+            self.skipTest('Symlink creation not available on this Windows runner')
         self.write(script(MOD.gate.REQUIRED_PREFIXES))
         with self.assertRaisesRegex(ValueError, 'symlink'):
             MOD.capture(self.child, self.log, 5)
