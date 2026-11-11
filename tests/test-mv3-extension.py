@@ -383,6 +383,77 @@ with sync_playwright() as p, TemporaryDirectory() as directory:
                 assert later['data']['liveLeases']==0 and later['data']['staleLeases']==0
                 assert later['data']['uncertainDriveCommits']==0 and later['data']['uncertainGithubCommits']==0
                 print('PASS MV3 TUR032 RESTART-UNLOCK-ALARM: genuine third browser restart and subsequent native alarm advances checkpoint without duplicate or stale leases')
+            # TUR038: a FOURTH actual Chromium process restart. One native
+            # scheduler alarm is delivered while sealed, and another after
+            # explicit unlock. Neither can create a second waiting run or a
+            # stale/live lease. No network provider mutations are attempted.
+            if os.environ.get('EMBASIC_TUR038_FOURTH_RESTART','0')=='1':
+                assert os.environ.get('EMBASIC_TUR032_LOCKED_RESTART','0')=='1', 'TUR038 requires genuine third-restart checkpoint'
+                fourth_before=third_send({'type':'diagnostics'})
+                assert fourth_before['ok'] and fourth_before['data']['lastSchedulerAt']
+                fourth_stamp=fourth_before['data']['lastSchedulerAt']
+                fourth_runs=third_send({'type':'snapshot'})
+                assert fourth_runs['ok'] and len(fourth_runs['data']['runs'])==1
+                fourth_run_id=fourth_runs['data']['runs'][0]['id']
+                assert fourth_runs['data']['runs'][0]['status']=='waiting'
+                assert third_send({'type':'vaultLock'})['ok'],'Fourth restart precondition: could not lock'
+                fourth_cipher=third.evaluate("""async ()=>(await chrome.storage.local.get('embasicSealedStateV3')).embasicSealedStateV3""")
+                assert fourth_cipher and fourth_cipher['data']
+                third.close()
+                ctx.close()
+                ctx=p.chromium.launch_persistent_context(
+                  directory,executable_path=chrome_bin,headless=headless,
+                  args=['--no-sandbox','--disable-dev-shm-usage',
+                        f'--disable-extensions-except={extension}',f'--load-extension={extension}'],timeout=18000)
+                fourth=ctx.new_page()
+                fourth.goto(f'chrome-extension://{extension_id}/dashboard.html',wait_until='domcontentloaded',timeout=10000)
+                fourth_send=lambda msg:fourth.evaluate(send_js,msg)
+                fourth_locked=fourth_send({'type':'vaultStatus'})
+                assert fourth_locked['ok'] and fourth_locked['data']['sealed'] and not fourth_locked['data']['unlocked']
+                assert not fourth_send({'type':'snapshot'})['ok'],'Fourth Chrome restart disclosed locked task'
+                stored=fourth.evaluate("""async ()=>(await chrome.storage.local.get('embasicSealedStateV3')).embasicSealedStateV3""")
+                assert stored==fourth_cipher,'Fourth restart mutated authenticated sealed state'
+                fourth.evaluate("""async()=>{
+                    window.__tur038Seen=0;
+                    chrome.alarms.onAlarm.addListener(a=>{if(a.name==='embasic-scheduler')window.__tur038Seen++;});
+                    await chrome.alarms.create('embasic-scheduler',{when:Date.now()+2500,periodInMinutes:1});
+                }""")
+                limit=time.monotonic()+float(os.environ.get('EMBASIC_TUR038_ALARM_TIMEOUT_S','70'))
+                while time.monotonic()<limit:
+                    fourth.wait_for_timeout(350)
+                    if fourth.evaluate('() => window.__tur038Seen >= 1'):
+                        break
+                else:
+                    raise AssertionError('Fourth Chrome restart native alarm did not fire while locked')
+                fourth.wait_for_timeout(350)
+                sealed_after=fourth.evaluate("""async ()=>(await chrome.storage.local.get('embasicSealedStateV3')).embasicSealedStateV3""")
+                assert sealed_after==fourth_cipher,'Fourth locked native alarm changed ciphertext'
+                assert not fourth_send({'type':'snapshot'})['ok'],'Fourth locked alarm exposed task'
+                assert fourth_send({'type':'vaultUnlock','password':passphrase})['ok']
+                fourth_diag=fourth_send({'type':'diagnostics'})
+                assert fourth_diag['ok'] and fourth_diag['data']['lastSchedulerAt']==fourth_stamp,'Fourth locked alarm mutated/reverted checkpoint'
+                fourth_snapshot=fourth_send({'type':'snapshot'})
+                assert fourth_snapshot['ok'] and len(fourth_snapshot['data']['runs'])==1
+                assert fourth_snapshot['data']['runs'][0]['id']==fourth_run_id and fourth_snapshot['data']['runs'][0]['status']=='waiting'
+                assert fourth_diag['data']['liveLeases']==fourth_diag['data']['staleLeases']==0
+                fourth.evaluate("""async()=>{
+                    await chrome.alarms.create('embasic-scheduler',{when:Date.now()+2500,periodInMinutes:1});
+                }""")
+                alarm_deadline=time.monotonic()+float(os.environ.get('EMBASIC_TUR038_ALARM_TIMEOUT_S','70'))
+                while time.monotonic()<alarm_deadline:
+                    time.sleep(0.65)
+                    fourth_after=fourth_send({'type':'diagnostics'})
+                    assert fourth_after['ok']
+                    if fourth_after['data']['lastSchedulerAt']>fourth_stamp:
+                        break
+                else:
+                    raise AssertionError('Fourth unlocked native alarm did not advance checkpoint')
+                after_runs=fourth_send({'type':'snapshot'})
+                assert after_runs['ok'] and len(after_runs['data']['runs'])==1
+                assert after_runs['data']['runs'][0]['id']==fourth_run_id and after_runs['data']['runs'][0]['status']=='waiting'
+                assert fourth_after['data']['liveLeases']==fourth_after['data']['staleLeases']==0
+                assert fourth_after['data']['uncertainDriveCommits']==fourth_after['data']['uncertainGithubCommits']==0
+                print('PASS MV3 TUR038 FOURTH-RESTART-DOUBLE-ALARM: fourth genuine Chrome restart, locked alarm sealed state intact, unlocked native alarm advanced checkpoint, single waiting run, zero leases')
             print('PASS MV3 REAL worker: fresh install, alarm, vault lock/unlock, actual browser restart, no duplicate')
         except Exception as err:
             print('FAIL MV3 REAL worker:',type(err).__name__,str(err)[:350],file=sys.stderr)

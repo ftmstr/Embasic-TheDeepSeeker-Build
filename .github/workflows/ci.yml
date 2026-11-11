@@ -80,19 +80,19 @@ jobs:
         run: |
           set -euo pipefail
           CHROMIUM_PATH="$(python -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()')"
-          export CHROMIUM_PATH EMBASIC_HEADLESS=1 EMBASIC_REQUIRE_MV3=1 EMBASIC_MV3_WAIT_MS=9000 EMBASIC_TUR029_PROFILE_PROBE=1 EMBASIC_TUR029_NATIVE_ALARM=1 EMBASIC_TUR029_ALARM_TIMEOUT_S=70 EMBASIC_TUR030_RESTART_ALARM=1 EMBASIC_TUR030_ALARM_TIMEOUT_S=70 EMBASIC_TUR031_LOCKED_ALARM=1 EMBASIC_TUR031_ALARM_TIMEOUT_S=70 EMBASIC_TUR032_LOCKED_RESTART=1 EMBASIC_TUR032_ALARM_TIMEOUT_S=70
+          export CHROMIUM_PATH EMBASIC_HEADLESS=1 EMBASIC_REQUIRE_MV3=1 EMBASIC_MV3_WAIT_MS=9000 EMBASIC_TUR029_PROFILE_PROBE=1 EMBASIC_TUR029_NATIVE_ALARM=1 EMBASIC_TUR029_ALARM_TIMEOUT_S=70 EMBASIC_TUR030_RESTART_ALARM=1 EMBASIC_TUR030_ALARM_TIMEOUT_S=70 EMBASIC_TUR031_LOCKED_ALARM=1 EMBASIC_TUR031_ALARM_TIMEOUT_S=70 EMBASIC_TUR032_LOCKED_RESTART=1 EMBASIC_TUR032_ALARM_TIMEOUT_S=70 EMBASIC_TUR038_FOURTH_RESTART=1 EMBASIC_TUR038_ALARM_TIMEOUT_S=70
           set +e
-          timeout --signal=TERM --kill-after=5s 360s python -u tests/test-mv3-extension.py 2>&1 | tee "$RUNNER_TEMP/tur032-mv3-probe.log"
+          timeout --signal=TERM --kill-after=5s 360s python -u tests/test-mv3-extension.py 2>&1 | tee "$RUNNER_TEMP/tur038-mv3-probe.log"
           rc=${PIPESTATUS[0]}
           set -e
           # A green CI job must never hide timeout, NOT_RUN, missing evidence,
           # duplicate checkpoints, or a failed probe behind the mocked UI.
-          python tools/verify-mv3-ci-evidence.py --log "$RUNNER_TEMP/tur032-mv3-probe.log" --exit-code "$rc"
+          python tools/verify-mv3-ci-evidence.py --log "$RUNNER_TEMP/tur038-mv3-probe.log" --exit-code "$rc"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: ${{ steps.evidence-label.outputs.label }}-linux-real-mv3-locked-restart-evidence
-          path: ${{ runner.temp }}/tur032-mv3-probe.log
+          path: ${{ runner.temp }}/tur038-mv3-probe.log
           if-no-files-found: warn
           retention-days: 30
   windows-structural:
