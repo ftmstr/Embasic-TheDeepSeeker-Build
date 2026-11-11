@@ -20,6 +20,18 @@ def git(*args: str) -> bytes:
     return subprocess.check_output(["git", *args])
 
 
+def require_index_matches_head() -> None:
+    """Reject staged/uncommitted tree drift before claiming HEAD provenance.
+
+    This is local package consistency only; remote GitHub PR HEAD and branch
+    identity must still be checked independently by trusted CI.
+    """
+    expected_tree = git("rev-parse", "HEAD^{tree}").decode("ascii").strip()
+    actual_index_tree = git("write-tree").decode("ascii").strip()
+    if actual_index_tree != expected_tree:
+        raise RuntimeError("Git index tree differs from HEAD; refuse uncommitted provenance")
+
+
 def collect() -> list[tuple[str, bytes, int, str]]:
     result = []
     for item in git("ls-files", "--stage", "-z").split(b"\x00"):
@@ -97,6 +109,7 @@ def main() -> None:
                     help="Canonical PR head branch, e.g. tur034/provenance-label-guard.")
     args = ap.parse_args()
     verify_round_identity(args.tur, args.branch)
+    require_index_matches_head()
     out_dir = args.out_dir.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     entries = collect()
