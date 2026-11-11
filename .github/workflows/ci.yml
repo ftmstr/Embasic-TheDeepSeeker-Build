@@ -12,12 +12,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Verify exact event HEAD before any test
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python tools/verify-ci-checkout.py --expected-sha "$EXPECTED_SHA"
+
       - name: Run every Node test
         run: |
           set -euo pipefail
@@ -29,6 +36,7 @@ jobs:
           python tests/test-package.py
           python tests/test-release-turn.py
           python tests/test-mv3-ci-gate.py
+          python tests/test-ci-head-binding.py
   simulated-chromium-ui:
     name: Mocked Chromium UI only (not real MV3)
     # Pin a supported, stable Ubuntu LTS; ubuntu-latest resolved to 26.10
@@ -36,9 +44,16 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Verify exact event HEAD before any test
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python tools/verify-ci-checkout.py --expected-sha "$EXPECTED_SHA"
+
       - run: python -m pip install playwright
       - name: Install Chromium and operating-system dependencies (bounded retry; fail closed)
         shell: bash
@@ -100,12 +115,19 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Verify exact event HEAD before any test
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python tools/verify-ci-checkout.py --expected-sha "$env:EXPECTED_SHA"
+
       - name: Run Node regressions
         shell: pwsh
         run: |
@@ -115,6 +137,7 @@ jobs:
       - run: python tests/test-package.py
       - run: python tests/test-release-turn.py
       - run: python tests/test-mv3-ci-gate.py
+      - run: python tests/test-ci-head-binding.py
   provenance-archives:
     name: CI source/Chrome ZIP Git blob and CRC parity (NOT live MV3)
     runs-on: ubuntu-latest
@@ -144,6 +167,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Verify exact PR HEAD via common fail-closed guard
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python tools/verify-ci-checkout.py --expected-sha "$EXPECTED_SHA"
       - name: Verify deterministic ZIPs and SHA receipts
         shell: bash
         run: |
