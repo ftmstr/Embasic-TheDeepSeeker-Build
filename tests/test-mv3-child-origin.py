@@ -1,5 +1,7 @@
 """TUR040 real OS subprocess evidence capture adversarial regression."""
 import importlib.util
+import os
+import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -35,6 +37,36 @@ class ChildOriginCapture(unittest.TestCase):
         MOD.capture(self.child, self.log, 5)
         self.assertEqual(self.log.read_bytes(),
                          ('\n'.join(p+' real-OS-child checkpoint' for p in MOD.gate.REQUIRED_PREFIXES)+'\n').encode())
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX inherited stdout descriptor regression')
+    def test_late_descendant_cannot_mutate_published_evidence(self):
+        # The direct child exits zero while its descendant retains writable
+        # stdout and emits a late FAIL. This tests snapshot immutability,
+        # NOT complete process-tree or cryptographic origin attestation.
+        marker = self.root/'late-writer.done'
+        late = (
+            'import pathlib,time;time.sleep(0.5);'
+            "print('FAIL MV3: late descendant',flush=True);"
+            f'pathlib.Path({str(marker)!r}).write_text("done")'
+        )
+        lines = [
+            'import subprocess,sys',
+            f'subprocess.Popen([sys.executable,"-c",{late!r}],'
+            'stdout=sys.stdout,stderr=sys.stderr,close_fds=False)',
+        ]
+        lines += [f'print({(p+" real-OS-child checkpoint")!r},flush=True)'
+                  for p in MOD.gate.REQUIRED_PREFIXES]
+        self.write('\n'.join(lines)+'\n')
+        MOD.capture(self.child, self.log, 5)
+        validated = self.log.read_bytes()
+        self.assertEqual(len(validated.splitlines()), len(MOD.gate.REQUIRED_PREFIXES))
+        for _ in range(40):
+            if marker.exists():
+                break
+            time.sleep(0.05)
+        self.assertTrue(marker.exists(), 'late descendant did not execute')
+        self.assertEqual(self.log.read_bytes(), validated,
+                         'late writer mutated already-verified published evidence')
 
     def test_forged_pass_lines_from_failing_os_process_rejected(self):
         self.write(script(MOD.gate.REQUIRED_PREFIXES, exit_code=7))

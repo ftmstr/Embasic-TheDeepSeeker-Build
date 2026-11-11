@@ -37,6 +37,7 @@ def capture(probe: Path, output: Path, timeout: float, cwd: Path = ROOT) -> None
         raise ValueError('Refuse symlink evidence destination')
     output.parent.mkdir(parents=True, exist_ok=True)
     scratch = None
+    publication = None
     try:
         with tempfile.NamedTemporaryFile(prefix='.mv3-child-', suffix='.raw',
                                          dir=output.parent, delete=False) as file:
@@ -63,13 +64,24 @@ def capture(probe: Path, output: Path, timeout: float, cwd: Path = ROOT) -> None
             raw = scratch.read_bytes()
             # Reject before publishing anything to a shared upload path.
             gate.verify(raw, returncode)
+        # A surviving descendant may retain a writable descriptor to scratch.
+        # Never publish that inode: publish only the gate-verified byte snapshot.
+        with tempfile.NamedTemporaryFile(prefix='.mv3-verified-', suffix='.raw',
+                                         dir=output.parent, delete=False) as verified:
+            publication = Path(verified.name)
+            verified.write(raw)
+            verified.flush()
+            os.fsync(verified.fileno())
         if output.is_symlink():
             raise ValueError('Evidence destination changed into symlink')
-        os.replace(scratch, output)
+        os.replace(publication, output)
+        publication = None
         print(f'PASS MV3 DIRECT CHILD: exit=0, bytes={len(raw)}, no shell tee; '
               'process origin NOT CRYPTOGRAPHICALLY PROVEN')
 
     finally:
+        if publication is not None and publication.exists():
+            publication.unlink()
         if scratch is not None and scratch.exists():
             scratch.unlink()
 
