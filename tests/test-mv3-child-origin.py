@@ -14,9 +14,11 @@ SPEC.loader.exec_module(MOD)
 
 def script(prefixes, more='', exit_code=0, sleep=0):
     lines = ['import sys,time', f'time.sleep({sleep})']
-    lines += [f'print({(p+" real-OS-child checkpoint")!r},flush=True)' for p in prefixes]
+    # Binary stdout avoids Windows text-mode CRLF, which the security gate
+    # correctly rejects as a terminal control character.
+    lines += [f'sys.stdout.buffer.write({(p+" real-OS-child checkpoint"+chr(10)).encode("utf-8")!r});sys.stdout.buffer.flush()' for p in prefixes]
     if more:
-        lines.append(f'print({more!r},flush=True)')
+        lines.append(f'sys.stdout.buffer.write({(more+chr(10)).encode("utf-8")!r});sys.stdout.buffer.flush()')
     lines.append(f'sys.exit({exit_code})')
     return '\n'.join(lines)+'\n'
 
