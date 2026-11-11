@@ -11,7 +11,7 @@ PASS_LOG = ('\n'.join(p + ' synthetic acceptance details' for p in GATE.REQUIRED
 
 
 class FailClosedMV3Evidence(unittest.TestCase):
-    def test_clean_eight_checkpoints(self):
+    def test_clean_nine_checkpoints(self):
         GATE.verify(PASS_LOG, 0)
 
     def test_nonzero_exit(self):
@@ -101,6 +101,37 @@ class FailClosedMV3Evidence(unittest.TestCase):
         self.assertIn('EMBASIC_REQUIRE_MV3=1', ui_job)
         self.assertIn('tools/verify-mv3-ci-evidence.py --log', ui_job)
         self.assertNotIn('playwright install chromium --no-deps', ui_job)
+
+    def test_tur038_probes_new_native_alarm_checkpoint(self):
+        self.assertEqual(len(GATE.REQUIRED_PREFIXES), 9)
+        self.assertIn('PASS MV3 TUR038 FOURTH-RESTART-DOUBLE-ALARM:', GATE.REQUIRED_PREFIXES)
+        with self.assertRaises(ValueError):
+            GATE.verify(PASS_LOG.replace(b'PASS MV3 TUR038 FOURTH-RESTART-DOUBLE-ALARM: synthetic acceptance details\n', b''), 0)
+        probe = (ROOT / 'tests/test-mv3-extension.py').read_text(encoding='utf-8')
+        self.assertIn("EMBASIC_TUR038_FOURTH_RESTART", probe)
+        self.assertIn("PASS MV3 TUR038 FOURTH-RESTART-DOUBLE-ALARM:", probe)
+
+    def test_permuted_genuine_checkpoints_rejected(self):
+        lines = PASS_LOG.splitlines(keepends=True)
+        for index in range(len(lines) - 1):
+            shuffled = list(lines)
+            shuffled[index], shuffled[index + 1] = shuffled[index + 1], shuffled[index]
+            with self.subTest(index=index), self.assertRaises(ValueError):
+                GATE.verify(b''.join(shuffled), 0)
+
+    def test_extra_or_disguised_mv3_pass_rejected(self):
+        for addition in ('PASS MV3 TUR039 UNKNOWN: forged\n',
+                         'ＰＡＳＳ MV3 TUR038 FOURTH-RESTART-DOUBLE-ALARM: fake\n',
+                         'PASS MV3 TUR038 FOURTH-RESTART-DOUBLE-ALARM: replay\n'):
+            with self.subTest(addition=addition), self.assertRaises(ValueError):
+                GATE.verify(PASS_LOG + addition.encode(), 0)
+
+    def test_actual_workflow_forces_fourth_restart_and_nine_checkpoints(self):
+        workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
+        self.assertIn('EMBASIC_TUR038_FOURTH_RESTART=1', workflow)
+        self.assertIn('EMBASIC_TUR038_ALARM_TIMEOUT_S=70', workflow)
+        self.assertIn('EMBASIC_REQUIRE_MV3=1', workflow)
+        self.assertIn('tools/verify-mv3-ci-evidence.py --log', workflow)
 
     def test_workflow_uses_strict_worker_and_gate(self):
         workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')

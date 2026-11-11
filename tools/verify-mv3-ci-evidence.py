@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail-closed CI evidence gate for genuine Linux Chromium MV3 acceptance.
 
-This checks local process outcome and eight independently named acceptance
+This checks local process outcome and nine independently named acceptance
 checkpoints. It does not attest a physical Windows browser, live provider, or
 cryptographic provenance of the log-producing process.
 """
@@ -12,8 +12,9 @@ from collections import Counter
 from pathlib import Path
 import sys
 
+# Order is meaningful and tied to the real probe emission sequence. A
+# complete set of forged PASS tokens in a shuffled log must not be green.
 REQUIRED_PREFIXES = (
-    'PASS MV3 REAL worker:',
     'PASS MV3 TUR029: two real Chrome profiles',
     'PASS MV3 TUR029 NATIVE ALARM:',
     'PASS MV3 TUR030 RESTART-ALARM:',
@@ -21,7 +22,10 @@ REQUIRED_PREFIXES = (
     'PASS MV3 TUR031 UNLOCK-ALARM:',
     'PASS MV3 TUR032 LOCKED-RESTART:',
     'PASS MV3 TUR032 RESTART-UNLOCK-ALARM:',
+    'PASS MV3 TUR038 FOURTH-RESTART-DOUBLE-ALARM:',
+    'PASS MV3 REAL worker:',
 )
+
 DENIED_PREFIXES = ('NOT_RUN MV3:', 'FAIL MV3:', 'FAIL MV3 REAL worker:',
                    'NOT_RUN: Linux MV3', 'NOT_RUN: Chromium MV3')
 MAX_LOG_BYTES = 2 * 1024 * 1024
@@ -54,15 +58,25 @@ def verify(log: bytes, exit_code: int) -> None:
     reject_unsafe_text(decoded)
     lines = decoded.split('\n')
     counts = Counter()
+    sequence = []
     for line in lines:
         normalized = line.strip()
         # NFKC folds compatibility forms (e.g. full-width FAIL). Scan the
         # whole line: timestamps and prefixes must not conceal a failure.
         if DENIAL_RE.search(unicodedata.normalize('NFKC', normalized)):
             raise ValueError(f'probe explicitly failed or did not run: {normalized[:100]}')
-        for prefix in REQUIRED_PREFIXES:
-            if normalized.startswith(prefix):
-                counts[prefix] += 1
+        hits = [prefix for prefix in REQUIRED_PREFIXES if normalized.startswith(prefix)]
+        if hits:
+            if len(hits) != 1:
+                raise ValueError('ambiguous MV3 checkpoint token')
+            counts[hits[0]] += 1
+            sequence.append(hits[0])
+        elif re.match(r'^PASS\s+MV3(?:\s|:)', unicodedata.normalize('NFKC', normalized), re.IGNORECASE):
+            # An unknown or compatibility-encoded PASS may masquerade as an
+            # extra valid checkpoint in job logs; reject rather than ignore.
+            raise ValueError('unexpected or noncanonical MV3 PASS evidence')
+    if sequence != list(REQUIRED_PREFIXES):
+        raise ValueError('MV3 checkpoint ordering, duplication or completeness mismatch')
     wrong = {p: counts[p] for p in REQUIRED_PREFIXES if counts[p] != 1}
     if wrong:
         raise ValueError(f'MV3 acceptance checkpoints must occur exactly once: {wrong}')
