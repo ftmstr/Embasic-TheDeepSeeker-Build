@@ -6,6 +6,8 @@ checkpoints. It does not attest a physical Windows browser, live provider, or
 cryptographic provenance of the log-producing process.
 """
 import argparse
+import re
+import unicodedata
 from collections import Counter
 from pathlib import Path
 import sys
@@ -23,6 +25,21 @@ REQUIRED_PREFIXES = (
 DENIED_PREFIXES = ('NOT_RUN MV3:', 'FAIL MV3:', 'FAIL MV3 REAL worker:',
                    'NOT_RUN: Linux MV3', 'NOT_RUN: Chromium MV3')
 MAX_LOG_BYTES = 2 * 1024 * 1024
+# Reject terminal controls and Unicode format characters before interpreting
+# checkpoints. A colored or bidi-reordered FAIL must not become invisible.
+DENIAL_RE = re.compile(
+    r'(?<![A-Z0-9_])(?:FAIL\s+MV3|NOT_RUN\s+MV3|'
+    r'NOT_RUN:\s*(?:LINUX|CHROMIUM)\s+MV3)', re.IGNORECASE
+)
+
+
+def reject_unsafe_text(text: str) -> None:
+    for character in text:
+        category = unicodedata.category(character)
+        if (character != '\n' and (category in ('Cc', 'Cf', 'Cs', 'Zl', 'Zp')
+                                    or 0x7f <= ord(character) <= 0x9f)):
+            raise ValueError('terminal/Unicode control or format character in MV3 evidence')
+
 
 
 def verify(log: bytes, exit_code: int) -> None:
@@ -31,13 +48,17 @@ def verify(log: bytes, exit_code: int) -> None:
     if not log or len(log) > MAX_LOG_BYTES or b'\x00' in log:
         raise ValueError('missing, oversized, or binary MV3 evidence')
     try:
-        lines = log.decode('utf-8', errors='strict').splitlines()
+        decoded = log.decode('utf-8', errors='strict')
     except UnicodeDecodeError as exc:
         raise ValueError('MV3 evidence is not valid UTF-8') from exc
+    reject_unsafe_text(decoded)
+    lines = decoded.split('\n')
     counts = Counter()
     for line in lines:
         normalized = line.strip()
-        if any(normalized.startswith(p) for p in DENIED_PREFIXES):
+        # NFKC folds compatibility forms (e.g. full-width FAIL). Scan the
+        # whole line: timestamps and prefixes must not conceal a failure.
+        if DENIAL_RE.search(unicodedata.normalize('NFKC', normalized)):
             raise ValueError(f'probe explicitly failed or did not run: {normalized[:100]}')
         for prefix in REQUIRED_PREFIXES:
             if normalized.startswith(prefix):

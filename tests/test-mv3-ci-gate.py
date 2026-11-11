@@ -50,6 +50,58 @@ class FailClosedMV3Evidence(unittest.TestCase):
         # which is not a failure of the Linux acceptance probe.
         GATE.verify(PASS_LOG + b'Physical Windows 24h NOT_RUN\n', 0)
 
+    def test_terminal_ansi_bypass_regression(self):
+        for marker in (b'\x1b[31mFAIL MV3: hidden\x1b[0m\n',
+                       b'\x1b[0KNOT_RUN MV3: hidden\n',
+                       b'\x08FAIL MV3: hidden\n',
+                       b'\x1b]0;FAIL MV3\x07\n',
+                       b'\tFAIL MV3: hidden\n',
+                       b'\rFAIL MV3: hidden\n'):
+            with self.subTest(marker=marker), self.assertRaises(ValueError):
+                GATE.verify(PASS_LOG + marker, 0)
+
+    def test_unicode_format_bidi_and_separator_bypass_regression(self):
+        for marker in ('\u202eFAIL MV3: hidden\n',
+                       '\u200bFAIL MV3: hidden\n',
+                       '\u2066FAIL MV3: hidden\u2069\n',
+                       '\u2028FAIL MV3: hidden\n',
+                       '\u0085FAIL MV3: hidden\n'):
+            with self.subTest(marker=marker), self.assertRaises(ValueError):
+                GATE.verify(PASS_LOG + marker.encode('utf-8'), 0)
+
+    def test_embedded_and_prefixed_failure_markers(self):
+        for marker in ('2026-11-11T12:00Z FAIL MV3: actual failure\n',
+                       '[runner] NOT_RUN MV3: skipped\n',
+                       'prefix FAIL MV3 REAL worker: crash\n',
+                       'prefix NOT_RUN: Linux MV3 timeout\n',
+                       'prefix NOT_RUN: Chromium MV3 unavailable\n',
+                       'pass-looking line | FAIL   MV3: hidden\n',
+                       'ｆａｉｌ MV3: compatibility fold\n'):
+            with self.subTest(marker=marker), self.assertRaises(ValueError):
+                GATE.verify(PASS_LOG + marker.encode('utf-8'), 0)
+
+    def test_clean_unicode_and_historical_windows_scope(self):
+        GATE.verify(PASS_LOG + 'Info: café output, Windows 24h NOT_RUN (scope only)\n'.encode(), 0)
+
+    def test_controls_inside_positive_checkpoint(self):
+        for marker in (b'\x1b[0m', '\u202e'.encode(), b'\x7f', b'\r', '\u2028'.encode(), '\u0085'.encode()):
+            with self.subTest(marker=marker), self.assertRaises(ValueError):
+                GATE.verify(PASS_LOG.replace(b'PASS MV3 REAL worker:',
+                                             marker + b'PASS MV3 REAL worker:'), 0)
+
+    def test_tur037_ci_dependency_failclosed_retry(self):
+        workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
+        ui_job = workflow.split('  simulated-chromium-ui:', 1)[1].split('  windows-structural:', 1)[0]
+        self.assertIn('runs-on: ubuntu-24.04', ui_job)
+        self.assertNotIn('runs-on: ubuntu-latest', ui_job)
+        self.assertIn('timeout --signal=TERM --kill-after=10s 180s python -m playwright install --with-deps chromium', ui_job)
+        self.assertIn('set -euo pipefail', ui_job)
+        self.assertIn('if [ "$attempt" -eq 3 ]; then', ui_job)
+        self.assertIn('exit 1', ui_job)
+        self.assertIn('EMBASIC_REQUIRE_MV3=1', ui_job)
+        self.assertIn('tools/verify-mv3-ci-evidence.py --log', ui_job)
+        self.assertNotIn('playwright install chromium --no-deps', ui_job)
+
     def test_workflow_uses_strict_worker_and_gate(self):
         workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
         self.assertIn('EMBASIC_REQUIRE_MV3=1', workflow)
