@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path, PurePosixPath
 import subprocess
 import zipfile
@@ -72,12 +73,30 @@ def make_zip(target: Path, entries: list[tuple[str, bytes, int, str]], chrome: b
     return names
 
 
+def verify_round_identity(tur: str, branch: str) -> None:
+    """Bind artifact label to the actual TUR branch; never silently relabel prior work.
+
+    This is a CI packaging guard, not a cryptographic identity or production attestation.
+    """
+    match = re.fullmatch(r"TUR([0-9]{3,})", tur)
+    if not match or int(match.group(1)) < 26:
+        raise RuntimeError("Invalid release TUR identifier")
+    expected = f"tur{match.group(1)}/"
+    if not branch.startswith(expected) or branch == expected:
+        raise RuntimeError("Artifact TUR/branch mismatch: refuse mislabeled archive")
+    if any(c in branch for c in ("\n", "\r", " ")):
+        raise RuntimeError("Invalid branch identity")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out-dir", required=True, type=Path)
-    ap.add_argument("--tur", required=True, choices=["TUR026", "TUR027", "TUR028", "TUR029", "TUR030", "TUR031", "TUR032"],
-                    help="Exact independently verified round ID; never silently relabel an archive.")
+    ap.add_argument("--tur", required=True,
+                    help="Exact TUR ID, bound to the provided canonical TUR branch.")
+    ap.add_argument("--branch", required=True,
+                    help="Canonical PR head branch, e.g. tur034/provenance-label-guard.")
     args = ap.parse_args()
+    verify_round_identity(args.tur, args.branch)
     out_dir = args.out_dir.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     entries = collect()
@@ -93,6 +112,7 @@ def main() -> None:
     head = git("rev-parse", "HEAD").decode().strip()
     provenance = {
         "tur": args.tur,
+        "branch": args.branch,
         "head": head,
         "manifestVersion": manifest["version"],
         "sourceCount": len(source_names),
