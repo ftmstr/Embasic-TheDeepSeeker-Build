@@ -31,14 +31,34 @@ jobs:
           python tests/test-mv3-ci-gate.py
   simulated-chromium-ui:
     name: Mocked Chromium UI only (not real MV3)
-    runs-on: ubuntu-latest
+    # Pin a supported, stable Ubuntu LTS; ubuntu-latest resolved to 26.10
+    # (resolute) on the failed 43034694123 run, with transient apt DNS outage.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - run: python -m pip install playwright
-      - run: python -m playwright install --with-deps chromium
+      - name: Install Chromium and operating-system dependencies (bounded retry; fail closed)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Do not substitute --no-deps, skip Playwright, or turn a missing
+          # browser into a green MOCK UI result. The genuine MV3 gate below
+          # still requires a real Chromium worker and eight exact checkpoints.
+          for attempt in 1 2 3; do
+            if timeout --signal=TERM --kill-after=10s 180s python -m playwright install --with-deps chromium; then
+              echo "PASS Chromium dependencies installed on stable ubuntu-24.04 (attempt $attempt)"
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo '::error::Chromium/apt dependency installation failed three times; genuine MV3 NOT_RUN; CI must fail'
+              exit 1
+            fi
+            echo "::warning::Transient Chromium/apt dependency failure, bounded retry $attempt/3"
+            sleep "$((attempt * 5))"
+          done
       - name: Run mocked UI smoke test
         run: |
           CHROMIUM_PATH="$(python -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()')"

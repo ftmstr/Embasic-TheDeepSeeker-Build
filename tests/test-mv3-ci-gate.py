@@ -89,6 +89,19 @@ class FailClosedMV3Evidence(unittest.TestCase):
                 GATE.verify(PASS_LOG.replace(b'PASS MV3 REAL worker:',
                                              marker + b'PASS MV3 REAL worker:'), 0)
 
+    def test_tur037_ci_dependency_failclosed_retry(self):
+        workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
+        ui_job = workflow.split('  simulated-chromium-ui:', 1)[1].split('  windows-structural:', 1)[0]
+        self.assertIn('runs-on: ubuntu-24.04', ui_job)
+        self.assertNotIn('runs-on: ubuntu-latest', ui_job)
+        self.assertIn('timeout --signal=TERM --kill-after=10s 180s python -m playwright install --with-deps chromium', ui_job)
+        self.assertIn('set -euo pipefail', ui_job)
+        self.assertIn('if [ "$attempt" -eq 3 ]; then', ui_job)
+        self.assertIn('exit 1', ui_job)
+        self.assertIn('EMBASIC_REQUIRE_MV3=1', ui_job)
+        self.assertIn('tools/verify-mv3-ci-evidence.py --log', ui_job)
+        self.assertNotIn('playwright install chromium --no-deps', ui_job)
+
     def test_workflow_uses_strict_worker_and_gate(self):
         workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
         self.assertIn('EMBASIC_REQUIRE_MV3=1', workflow)
