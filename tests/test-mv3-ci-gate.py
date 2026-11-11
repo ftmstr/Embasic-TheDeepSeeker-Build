@@ -1,0 +1,63 @@
+"""Adversarial regression for Linux MV3 CI evidence fail-closed gate."""
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+SPEC = spec_from_file_location('mv3_gate', ROOT / 'tools/verify-mv3-ci-evidence.py')
+GATE = module_from_spec(SPEC)
+SPEC.loader.exec_module(GATE)
+PASS_LOG = ('\n'.join(p + ' synthetic acceptance details' for p in GATE.REQUIRED_PREFIXES) + '\n').encode()
+
+
+class FailClosedMV3Evidence(unittest.TestCase):
+    def test_clean_eight_checkpoints(self):
+        GATE.verify(PASS_LOG, 0)
+
+    def test_nonzero_exit(self):
+        for code in (1, 2, 124, 137, 143, -15):
+            with self.subTest(code=code), self.assertRaises(ValueError):
+                GATE.verify(PASS_LOG, code)
+
+    def test_missing_checkpoint(self):
+        for p in GATE.REQUIRED_PREFIXES:
+            with self.subTest(prefix=p), self.assertRaises(ValueError):
+                GATE.verify(PASS_LOG.replace((p + ' synthetic acceptance details\n').encode(), b''), 0)
+
+    def test_duplicate_checkpoint(self):
+        for p in GATE.REQUIRED_PREFIXES:
+            with self.subTest(prefix=p), self.assertRaises(ValueError):
+                GATE.verify(PASS_LOG + (p + ' replayed\n').encode(), 0)
+
+    def test_not_run_with_forged_pass(self):
+        for marker in (b'NOT_RUN MV3: unavailable\n', b'FAIL MV3: assertion\n',
+                       b'FAIL MV3 REAL worker: assertion\n', b'NOT_RUN: Linux MV3 timeout\n'):
+            with self.subTest(marker=marker), self.assertRaises(ValueError):
+                GATE.verify(PASS_LOG + marker, 0)
+
+    def test_non_evidence(self):
+        for raw in (b'', b'\x00' + PASS_LOG, b'\xff' + PASS_LOG,
+                    PASS_LOG + b'A' * (GATE.MAX_LOG_BYTES + 1)):
+            with self.subTest(length=len(raw)), self.assertRaises(ValueError):
+                GATE.verify(raw, 0)
+
+    def test_partial_prefix_forgery(self):
+        with self.assertRaises(ValueError):
+            GATE.verify(PASS_LOG.replace(b'PASS MV3 REAL worker:', b'PASS MV3 REAL worke:'), 0)
+
+    def test_legacy_honest_not_run_note_in_success(self):
+        # Historical successful log mentions physical Windows NOT_RUN as scope,
+        # which is not a failure of the Linux acceptance probe.
+        GATE.verify(PASS_LOG + b'Physical Windows 24h NOT_RUN\n', 0)
+
+    def test_workflow_uses_strict_worker_and_gate(self):
+        workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
+        self.assertIn('EMBASIC_REQUIRE_MV3=1', workflow)
+        self.assertIn('python tests/test-mv3-ci-gate.py', workflow)
+        self.assertIn('python tools/verify-mv3-ci-evidence.py --log', workflow)
+        self.assertNotIn('EMBASIC_REQUIRE_MV3=0', workflow)
+        self.assertNotIn("echo '::notice::Chromium MV3 worker unavailable: NOT_RUN", workflow)
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)
