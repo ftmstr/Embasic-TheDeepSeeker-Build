@@ -132,6 +132,7 @@ class FailClosedMV3Evidence(unittest.TestCase):
         self.assertIn('EMBASIC_TUR038_ALARM_TIMEOUT_S=70', workflow)
         self.assertIn('EMBASIC_REQUIRE_MV3=1', workflow)
         self.assertIn('tools/verify-mv3-ci-evidence.py --log', workflow)
+        self.assertIn('python tools/capture-mv3-probe.py --log', workflow)
 
     def test_workflow_uses_strict_worker_and_gate(self):
         workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
