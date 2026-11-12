@@ -1,6 +1,7 @@
 """TUR042 real OS bounded-pipe and process-tree capture adversarial regression."""
 import importlib.util
 import os
+import threading
 import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -143,6 +144,56 @@ class ChildOriginCapture(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'symlink'):
             MOD.capture(self.child, self.log, 5)
         self.assertEqual(target.read_text(), 'untouched')
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX dirfd and O_NOFOLLOW required')
+    def test_parent_symlink_rejected_before_probe(self):
+        target = self.root / 'attacker'
+        target.mkdir()
+        parent = self.root / 'linked-evidence'
+        parent.symlink_to(target, target_is_directory=True)
+        log = parent / 'probe.log'
+        self.write(script(MOD.gate.REQUIRED_PREFIXES))
+        with self.assertRaises(OSError):
+            MOD.capture(self.child, log, 5)
+        self.assertFalse((target / 'probe.log').exists())
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX parent rename adversary')
+    def test_parent_rename_symlink_swap_cannot_publish_to_attacker(self):
+        parent = self.root / 'evidence'
+        parent.mkdir()
+        moved = self.root / 'original-evidence'
+        attacker = self.root / 'attacker'
+        attacker.mkdir()
+        out = parent / 'genuine.log'
+        self.write(script(MOD.gate.REQUIRED_PREFIXES, sleep=0.6))
+        def swap():
+            time.sleep(0.12)
+            parent.rename(moved)
+            parent.symlink_to(attacker, target_is_directory=True)
+        thread = threading.Thread(target=swap)
+        thread.start()
+        try:
+            with self.assertRaisesRegex(ValueError, 'changed identity'):
+                MOD.capture(self.child, out, 5)
+        finally:
+            thread.join(timeout=3)
+        self.assertFalse((attacker / 'genuine.log').exists())
+        self.assertFalse((moved / 'genuine.log').exists())
+        self.assertFalse(any(p.name.startswith('.mv3-verified-') for p in moved.iterdir()))
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX secure directory proof')
+    def test_preexisting_symlink_inside_pinned_parent_is_not_unlinked(self):
+        parent = self.root / 'evidence'
+        parent.mkdir()
+        victim = self.root / 'victim'
+        victim.write_text('protected', encoding='utf-8')
+        log = parent / 'proof.log'
+        log.symlink_to(victim)
+        self.write(script(MOD.gate.REQUIRED_PREFIXES))
+        with self.assertRaisesRegex(ValueError, 'symlink'):
+            MOD.capture(self.child, log, 5)
+        self.assertEqual(victim.read_text(encoding='utf-8'), 'protected')
+        self.assertTrue(log.is_symlink())
 
     def test_unbounded_timeout_rejected(self):
         self.write(script(MOD.gate.REQUIRED_PREFIXES))
