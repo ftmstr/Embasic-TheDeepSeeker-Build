@@ -109,3 +109,67 @@ def audit_claimed_witness_quorum(records, *, expected_repository: str,
             trusted_prior_sequence=trusted_prior_sequences[record.witness_id])
     if identities != expected_witness_ids:
         raise WitnessNoGo('claimed witness quorum incomplete')
+
+
+@dataclass(frozen=True)
+class ClaimedWitnessEpoch:
+    """One caller-supplied epoch; NO independent provenance is asserted."""
+
+    repository: str
+    commit_sha: str
+    proof_sha256: str
+    run_id: int
+    challenge: str
+    records: tuple[WitnessBinding, ...]
+
+
+def audit_claimed_witness_transcript(epochs, *, expected_repository: str,
+                                     trusted_prior_sequences, expected_witness_ids) -> None:
+    """Bounded STRUCTURAL cross-run consistency audit; NOT a WORM witness.
+
+    Fail closed for reused challenge/run, nonmonotonic claimed witness sequence,
+    equivocated/incomplete claimed epochs or invalid bounded inputs. It does
+    NOT authenticate the caller-provided prior sequences, witness identities,
+    epochs or challenge source. A same-UID adversary can forge EVERY field and
+    construct a valid transcript. Never connect this to production release.
+    """
+    if (expected_repository != 'ftmstr/Embasic-TheDeepSeeker-Build' or
+            not isinstance(epochs, (tuple, list)) or
+            not 2 <= len(epochs) <= 32 or
+            type(expected_witness_ids) is not frozenset or
+            len(expected_witness_ids) < 2 or
+            type(trusted_prior_sequences) is not dict or
+            set(trusted_prior_sequences) != expected_witness_ids or
+            any(type(key) is not str or not _ID.fullmatch(key)
+                for key in expected_witness_ids) or
+            any(type(value) is not int or not 0 <= value < (1 << 63)
+                for value in trusted_prior_sequences.values())):
+        raise WitnessNoGo('invalid bounded claimed witness transcript or local anchors')
+    prior = trusted_prior_sequences.copy()
+    observed_challenges = set()
+    last_run = 0
+    for epoch in epochs:
+        if type(epoch) is not ClaimedWitnessEpoch:
+            raise WitnessNoGo('invalid epoch record type')
+        if (epoch.repository != expected_repository or
+                type(epoch.run_id) is not int or epoch.run_id <= last_run or
+                type(epoch.commit_sha) is not str or not _HEAD.fullmatch(epoch.commit_sha) or
+                type(epoch.proof_sha256) is not str or not _SHA.fullmatch(epoch.proof_sha256) or
+                type(epoch.challenge) is not str or not _ID.fullmatch(epoch.challenge) or
+                epoch.challenge in observed_challenges):
+            raise WitnessNoGo('replayed run/challenge or malformed claimed epoch')
+        if any(type(rec.witness_sequence) is not int or
+               rec.witness_sequence >= (1 << 63) for rec in epoch.records):
+            raise WitnessNoGo('invalid or overflowing claimed sequence')
+        audit_claimed_witness_quorum(
+            epoch.records, expected_repository=expected_repository,
+            expected_commit_sha=epoch.commit_sha,
+            expected_proof_sha256=epoch.proof_sha256,
+            expected_run_id=epoch.run_id,
+            expected_challenge=epoch.challenge,
+            trusted_prior_sequences=prior,
+            expected_witness_ids=expected_witness_ids)
+        for rec in epoch.records:
+            prior[rec.witness_id] = rec.witness_sequence
+        observed_challenges.add(epoch.challenge)
+        last_run = epoch.run_id
