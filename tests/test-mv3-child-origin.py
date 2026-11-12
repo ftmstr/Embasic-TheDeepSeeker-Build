@@ -1,5 +1,6 @@
 """TUR042 real OS bounded-pipe and process-tree capture adversarial regression."""
 import importlib.util
+import hashlib
 import os
 import threading
 from unittest import mock
@@ -389,6 +390,82 @@ class ChildOriginCapture(unittest.TestCase):
         old = self.log.read_bytes()
         self.log.write_bytes(b'same UID can rewrite later')
         self.assertNotEqual(self.log.read_bytes(), old)
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX separate pinned SHA256 readback')
+    def test_later_readonly_verifier_accepts_exact_independently_pinned_bytes(self):
+        self.write(script(MOD.gate.REQUIRED_PREFIXES))
+        MOD.capture(self.child, self.log, 5)
+        pinned = hashlib.sha256(self.log.read_bytes()).hexdigest()
+        self.assertEqual(MOD.verify_published_evidence(self.log, pinned), self.log.read_bytes())
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX same-UID after-return rewrite')
+    def test_same_uid_after_return_rewrite_rejected_by_original_pinned_sha(self):
+        self.write(script(MOD.gate.REQUIRED_PREFIXES))
+        MOD.capture(self.child, self.log, 5)
+        pinned = hashlib.sha256(self.log.read_bytes()).hexdigest()
+        self.log.write_bytes(self.log.read_bytes().replace(b'real-OS-child', b'evil-OS-child'))
+        with self.assertRaisesRegex(ValueError, 'SHA256 differs'):
+            MOD.verify_published_evidence(self.log, pinned)
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX local hash trust counterexample')
+    def test_same_uid_can_forge_both_valid_markers_and_local_digest(self):
+        self.write(script(MOD.gate.REQUIRED_PREFIXES))
+        MOD.capture(self.child, self.log, 5)
+        original = hashlib.sha256(self.log.read_bytes()).hexdigest()
+        self.log.write_bytes(self.log.read_bytes().replace(b'real-OS-child', b'fake-OS-child'))
+        forged_digest = hashlib.sha256(self.log.read_bytes()).hexdigest()
+        self.assertNotEqual(original, forged_digest)
+        # This must REMAIN a deliberately successful negative PoC: a
+        # same-UID adversary can replace both artifact and expected digest.
+        self.assertEqual(MOD.verify_published_evidence(self.log, forged_digest), self.log.read_bytes())
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX symlink/hardlink refusal')
+    def test_readonly_verifier_refuses_symlink_and_hardlink(self):
+        self.write(script(MOD.gate.REQUIRED_PREFIXES))
+        MOD.capture(self.child, self.log, 5)
+        digest = hashlib.sha256(self.log.read_bytes()).hexdigest()
+        other = self.root / 'hardlink'
+        os.link(self.log, other)
+        with self.assertRaisesRegex(ValueError, 'regular inode'):
+            MOD.verify_published_evidence(self.log, digest)
+        other.unlink()
+        victim = self.root / 'independent-proof'
+        self.log.rename(victim)
+        self.log.symlink_to(victim)
+        with self.assertRaises(OSError):
+            MOD.verify_published_evidence(self.log, digest)
+        self.assertTrue(victim.is_file())
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX real dirfd race')
+    def test_readonly_verifier_rejects_parent_rename_during_fd_read(self):
+        parent = self.root / 'readable-parent'
+        parent.mkdir()
+        target = parent / 'proof.log'
+        self.write(script(MOD.gate.REQUIRED_PREFIXES))
+        MOD.capture(self.child, target, 5)
+        digest = hashlib.sha256(target.read_bytes()).hexdigest()
+        moved = self.root / 'renamed-parent'
+        original_read = MOD.os.read
+        injected = False
+        def read_and_swap(fd, count):
+            nonlocal injected
+            data = original_read(fd, count)
+            if not injected:
+                injected = True
+                parent.rename(moved)
+                parent.mkdir()
+            return data
+        with mock.patch.object(MOD.os, 'read', side_effect=read_and_swap):
+            with self.assertRaisesRegex(ValueError, 'parent directory identity changed'):
+                MOD.verify_published_evidence(target, digest)
+        self.assertFalse(target.exists())
+        self.assertTrue((moved / 'proof.log').exists())
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX size bound')
+    def test_readonly_verifier_never_hashes_more_than_2mib(self):
+        self.log.write_bytes(b'X' * (MOD.gate.MAX_LOG_BYTES + 1))
+        with self.assertRaisesRegex(ValueError, 'bounded read quota'):
+            MOD.verify_published_evidence(self.log, hashlib.sha256(b'X').hexdigest())
 
     def test_unbounded_timeout_rejected(self):
         self.write(script(MOD.gate.REQUIRED_PREFIXES))

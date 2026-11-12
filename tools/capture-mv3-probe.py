@@ -9,6 +9,8 @@ memory/disk consumption of a compromised OS child, nor runner provenance.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import hmac
 import importlib.util
 import os
 if os.name == 'posix':
@@ -303,13 +305,93 @@ def capture(probe: Path, output: Path, timeout: float, cwd: Path = ROOT) -> None
                 os.close(directory_fd)
 
 
+
+def verify_published_evidence(output: Path, expected_sha256: str) -> bytes:
+    """Read-only POSIX recheck against a caller-pinned digest.
+
+    The digest MUST come from a separately authenticated trust domain.
+    A caller-controlled local .sha256 file, the same UID, or a writable
+    log+digest pair is NOT an external integrity witness. No claim of WORM,
+    independent publisher identity, freshness or post-return immutability.
+    """
+    if os.name != 'posix':
+        raise ValueError('Published MV3 verification requires POSIX dirfd; Windows physical NOT_RUN')
+    if not (len(expected_sha256) == 64 and
+            all(c in '0123456789abcdef' for c in expected_sha256)):
+        raise ValueError('Expected independently pinned lowercase SHA256 digest required')
+    parent = output.parent.absolute()
+    # Ancestor checks are advisory and non-atomic. The pinned dirfd is the
+    # authority for all actual file operations, but no external trust anchor.
+    node = parent
+    while True:
+        if stat.S_ISLNK(os.lstat(node).st_mode):
+            raise ValueError('MV3 evidence ancestor symlink forbidden')
+        if node.parent == node:
+            break
+        node = node.parent
+    directory_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        fcntl.flock(directory_fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        before_dir = os.fstat(directory_fd)
+        if (before_dir.st_uid != os.geteuid() or
+                before_dir.st_mode & (stat.S_IWGRP | stat.S_IWOTH)):
+            raise ValueError('MV3 evidence parent directory is not private to owner')
+        fd = os.open(output.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                     dir_fd=directory_fd)
+        try:
+            before = os.fstat(fd)
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+                raise ValueError('MV3 evidence must be an unlinked-private regular inode')
+            if before.st_size > gate.MAX_LOG_BYTES:
+                raise ValueError('MV3 published evidence exceeds bounded read quota')
+            raw = bytearray()
+            while len(raw) <= gate.MAX_LOG_BYTES:
+                part = os.read(fd, min(READ_CHUNK_BYTES, gate.MAX_LOG_BYTES + 1 - len(raw)))
+                if not part:
+                    break
+                raw.extend(part)
+            if len(raw) > gate.MAX_LOG_BYTES:
+                raise ValueError('MV3 published evidence exceeds bounded read quota')
+            after = os.fstat(fd)
+            original_identity = (before.st_dev, before.st_ino)
+            metadata = lambda st: (st.st_dev, st.st_ino, st.st_nlink, st.st_size,
+                                   st.st_mtime_ns, st.st_ctime_ns)
+            if metadata(before) != metadata(after):
+                raise ValueError('MV3 published evidence changed during readback')
+            current = os.stat(output.name, dir_fd=directory_fd, follow_symlinks=False)
+            if (current.st_dev, current.st_ino) != original_identity:
+                raise ValueError('MV3 evidence path inode changed during readback')
+            if not hmac.compare_digest(hashlib.sha256(raw).hexdigest(), expected_sha256):
+                raise ValueError('MV3 published evidence SHA256 differs from pinned digest')
+            gate.verify(bytes(raw), 0)
+            final_parent = os.stat(parent, follow_symlinks=False)
+            if ((final_parent.st_dev, final_parent.st_ino) !=
+                    (before_dir.st_dev, before_dir.st_ino) or
+                    before_dir.st_dev != os.fstat(directory_fd).st_dev or
+                    before_dir.st_ino != os.fstat(directory_fd).st_ino):
+                raise ValueError('MV3 published parent directory identity changed')
+            return bytes(raw)
+        finally:
+            os.close(fd)
+    finally:
+        os.close(directory_fd)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--log', type=Path, required=True)
     parser.add_argument('--timeout-seconds', type=float, default=360)
+    parser.add_argument('--verify-published', action='store_true')
+    parser.add_argument('--expected-sha256', type=str)
     args = parser.parse_args()
     try:
-        capture(PROBE, args.log, args.timeout_seconds)
+        if args.verify_published:
+            verified = verify_published_evidence(args.log, args.expected_sha256 or '')
+            print(f'PASS MV3 PUBLISHED READBACK: {len(verified)} bytes; pinned SHA256 matches; independent witness NOT_PROVEN')
+        else:
+            if args.expected_sha256 is not None:
+                raise ValueError('--expected-sha256 only valid with --verify-published')
+            capture(PROBE, args.log, args.timeout_seconds)
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         print(f'FAIL MV3 DIRECT CHILD: {exc}', file=sys.stderr)
         return 1
