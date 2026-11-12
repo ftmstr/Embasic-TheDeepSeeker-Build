@@ -39,6 +39,7 @@ jobs:
           python tests/test-ci-head-binding.py
           python tests/test-mv3-child-origin.py
           python tests/test-mv3-witness-contract.py
+          python tests/test-mv3-witness-boundary-batch.py
   simulated-chromium-ui:
     name: Mocked Chromium UI only (not real MV3)
     # Pin a supported, stable Ubuntu LTS; ubuntu-latest resolved to 26.10
@@ -141,6 +142,7 @@ jobs:
       - run: python tests/test-ci-head-binding.py
       - run: python tests/test-mv3-child-origin.py
       - run: python tests/test-mv3-witness-contract.py
+      - run: python tests/test-mv3-witness-boundary-batch.py
   provenance-archives:
     name: CI source/Chrome ZIP Git blob and CRC parity (NOT live MV3)
     runs-on: ubuntu-latest
