@@ -195,6 +195,68 @@ class ChildOriginCapture(unittest.TestCase):
         self.assertEqual(victim.read_text(encoding='utf-8'), 'protected')
         self.assertTrue(log.is_symlink())
 
+    @unittest.skipUnless(os.name == 'posix', 'POSIX inode flock needed')
+    def test_concurrent_capture_fails_without_invalidating_active_writer(self):
+        # First direct child signals launch then sleeps before valid output.
+        # Second invocation targeting same directory must fail on the lock,
+        # not delete or publish over first invocation's eventual evidence.
+        parent = self.root / 'shared-evidence'
+        parent.mkdir()
+        started = self.root / 'first-child-started'
+        child1 = self.root / 'slow-first.py'
+        child2 = self.root / 'fast-second.py'
+        child1.write_text(
+            'import pathlib,time,sys\n'
+            f'pathlib.Path({str(started)!r}).write_text("ready")\n'
+            'time.sleep(0.7)\n' +
+            '\n'.join(f'print({(p+" real-OS-child checkpoint")!r},flush=True)'
+                      for p in MOD.gate.REQUIRED_PREFIXES) + '\n',
+            encoding='utf-8')
+        child2.write_text(script(MOD.gate.REQUIRED_PREFIXES), encoding='utf-8')
+        first = parent / 'first.log'
+        second = parent / 'second.log'
+        exceptions = []
+        def run_first():
+            try:
+                MOD.capture(child1, first, 5)
+            except Exception as exc:
+                exceptions.append(exc)
+        worker = threading.Thread(target=run_first)
+        worker.start()
+        try:
+            deadline = time.monotonic() + 3
+            while not started.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue(started.exists(), 'first process never started')
+            with self.assertRaisesRegex(ValueError, 'directory locked'):
+                MOD.capture(child2, second, 5)
+        finally:
+            worker.join(timeout=6)
+        self.assertFalse(worker.is_alive(), 'first capture never finished')
+        self.assertFalse(exceptions, f'first capture failed: {exceptions}')
+        self.assertTrue(first.exists())
+        self.assertFalse(second.exists())
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX hardlink inode metadata')
+    def test_hardlinked_stale_destination_denied_without_unlink(self):
+        target = self.root / 'outside-valuable-proof'
+        target.write_text('safeguarded', encoding='utf-8')
+        os.link(target, self.log)
+        self.write(script(MOD.gate.REQUIRED_PREFIXES))
+        with self.assertRaisesRegex(ValueError, 'hardlink'):
+            MOD.capture(self.child, self.log, 5)
+        self.assertEqual(target.read_text(encoding='utf-8'), 'safeguarded')
+        self.assertTrue(self.log.exists())
+        self.assertEqual(self.log.stat().st_ino, target.stat().st_ino)
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX nonregular inode metadata')
+    def test_existing_destination_directory_denied_without_mutation(self):
+        self.log.mkdir()
+        self.write(script(MOD.gate.REQUIRED_PREFIXES))
+        with self.assertRaisesRegex(ValueError, 'nonregular'):
+            MOD.capture(self.child, self.log, 5)
+        self.assertTrue(self.log.is_dir())
+
     def test_unbounded_timeout_rejected(self):
         self.write(script(MOD.gate.REQUIRED_PREFIXES))
         with self.assertRaisesRegex(ValueError, 'Unbounded'):
