@@ -127,6 +127,11 @@ def capture(probe: Path, output: Path, timeout: float, cwd: Path = ROOT) -> None
         # pipe. A descendant may deliberately retain stdout open: snapshot
         # only the direct-child result; never publish the writable pipe/inode.
         reader.join(timeout=POST_EXIT_DRAIN_SECONDS)
+        # A direct child can exit successfully while an untrusted descendant
+        # retains stdout. Never authenticate a partial pipe snapshot: require
+        # actual EOF from every inherited writer before evidence publication.
+        if not eof.is_set():
+            raise ValueError('Child MV3 stdout pipe remained open after bounded drain')
         if oversize.is_set():
             raise ValueError('Child MV3 stdout exceeded live evidence quota (bounded pipe)')
         if reader_error:
