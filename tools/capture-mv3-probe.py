@@ -92,8 +92,15 @@ def capture(probe: Path, output: Path, timeout: float, cwd: Path = ROOT) -> None
                 return
             if stat.S_ISLNK(mode):
                 raise ValueError('Refuse symlink evidence destination')
-        check_destination()
-        os.unlink(output.name, dir_fd=directory_fd) if os.path.lexists(output) else None
+        try:
+            check_destination()
+            try:
+                os.unlink(output.name, dir_fd=directory_fd)
+            except FileNotFoundError:
+                pass
+        except BaseException:
+            os.close(directory_fd)
+            raise
     else:
         # Windows retains the conservative original path-based behavior; not
         # an independently proved defense against a malicious parent rename.
