@@ -69,3 +69,43 @@ def production_witness_gate(*, binding: WitnessBinding | None = None,
     trust domain. Live provider mutations and publication remain disabled.
     """
     raise WitnessNoGo('external authenticated immutable witness and independent monotonic anchor NOT_RUN; PRODUCTION_NO_GO')
+
+
+def audit_claimed_witness_quorum(records, *, expected_repository: str,
+                                 expected_commit_sha: str, expected_proof_sha256: str,
+                                 expected_run_id: int, expected_challenge: str,
+                                 trusted_prior_sequences, expected_witness_ids) -> None:
+    """STRUCTURAL dual-domain claim audit only; NEVER authenticate trust domains.
+
+    Every prior sequence, claimed witness ID and all record bytes are supplied
+    by the caller. A same-UID attacker can forge an entire locally supplied
+    quorum, including these trust roots. This check must NEVER open the
+    production gate; no external signer, WORM, or monotonic store is connected.
+    """
+    if (not isinstance(records, (tuple, list)) or
+            not isinstance(expected_witness_ids, frozenset) or
+            len(expected_witness_ids) < 2 or
+            not isinstance(trusted_prior_sequences, dict) or
+            len(records) != len(expected_witness_ids) or
+            set(trusted_prior_sequences) != expected_witness_ids or
+            any(not isinstance(v, str) or not _ID.fullmatch(v)
+                for v in expected_witness_ids)):
+        raise WitnessNoGo('independent claimed quorum is missing or malformed')
+    identities = set()
+    for record in records:
+        if not isinstance(record, WitnessBinding):
+            raise WitnessNoGo('witness record type invalid')
+        if record.witness_id not in expected_witness_ids:
+            raise WitnessNoGo('unapproved claimed witness identity')
+        if record.witness_id in identities:
+            raise WitnessNoGo('reused claimed witness identity or replay')
+        identities.add(record.witness_id)
+        validate_witness_binding(
+            record, expected_repository=expected_repository,
+            expected_commit_sha=expected_commit_sha,
+            expected_proof_sha256=expected_proof_sha256,
+            expected_run_id=expected_run_id,
+            expected_challenge=expected_challenge,
+            trusted_prior_sequence=trusted_prior_sequences[record.witness_id])
+    if identities != expected_witness_ids:
+        raise WitnessNoGo('claimed witness quorum incomplete')
