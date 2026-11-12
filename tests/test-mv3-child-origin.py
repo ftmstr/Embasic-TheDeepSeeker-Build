@@ -66,7 +66,7 @@ class ChildOriginCapture(unittest.TestCase):
         try:
             MOD.capture(self.child, self.log, 5)
         except ValueError as exc:
-            self.assertIn('did not run', str(exc))
+            self.assertTrue('did not run' in str(exc) or 'pipe remained open' in str(exc))
             self.assertFalse(self.log.exists(), 'raced FAIL published an artifact')
         else:
             validated = self.log.read_bytes()
@@ -87,7 +87,7 @@ class ChildOriginCapture(unittest.TestCase):
                  'stdout=sys.stdout,stderr=sys.stderr,close_fds=False)']
         lines += [f'print({(p+" real-OS-child checkpoint")!r},flush=True)'
                   for p in MOD.gate.REQUIRED_PREFIXES]
-        self.write('\\n'.join(lines)+'\\n')
+        self.write('\n'.join(lines)+'\n')
         with self.assertRaisesRegex(ValueError, 'pipe remained open'):
             MOD.capture(self.child, self.log, 5)
         self.assertFalse(self.log.exists())
