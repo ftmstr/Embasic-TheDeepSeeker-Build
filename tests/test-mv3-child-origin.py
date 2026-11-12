@@ -121,9 +121,16 @@ class ChildOriginCapture(unittest.TestCase):
         self.write(script(MOD.gate.REQUIRED_PREFIXES, exit_code=9))
         with self.assertRaises(ValueError):
             MOD.capture(self.child, self.log, 5)
-        # A stale file is still present, so never upload one on failure:
-        # GitHub Actions upload-artifact must be under a success-only gate.
-        self.assertEqual(self.log.read_text(), 'trusted-old-not-current')
+        # A failed new probe must not leave an earlier green artifact at the
+        # current log path, even if manual uploads bypass CI success guards.
+        self.assertFalse(self.log.exists())
+
+    def test_stale_log_removed_before_child_timeout(self):
+        self.log.write_text('old-valid-looking-evidence', encoding='utf-8')
+        self.write(script(MOD.gate.REQUIRED_PREFIXES, sleep=1))
+        with self.assertRaisesRegex(ValueError, 'timeout'):
+            MOD.capture(self.child, self.log, 0.10)
+        self.assertFalse(self.log.exists(), 'stale accepted evidence survived timeout')
 
     def test_symlink_destination_rejected_without_writing(self):
         target = self.root/'sensitive'
