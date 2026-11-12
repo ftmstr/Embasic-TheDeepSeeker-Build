@@ -125,24 +125,24 @@ class ChildOriginCapture(unittest.TestCase):
         # A child that emits more than 2 MiB and then remains alive must be
         # terminated early, not allowed to occupy runner disk until timeout.
         marker = self.root/'child-survived-quota'
-        self.write(
-            'import pathlib,sys,time\\n'
-            f'sys.stdout.buffer.write(b"X"*{MOD.gate.MAX_LOG_BYTES+4096})\\n'
-            'sys.stdout.buffer.flush()\\n'
-            'time.sleep(2)\\n'
-            f'pathlib.Path({str(marker)!r}).write_text("survived")\\n'
-        .replace('\\\\n', '\\n'))
+        self.write('\\n'.join([
+            'import pathlib,sys,time',
+            f'sys.stdout.buffer.write(b"X"*{MOD.gate.MAX_LOG_BYTES+4096})',
+            'sys.stdout.buffer.flush()',
+            'time.sleep(2)',
+            f'pathlib.Path({str(marker)!r}).write_text("survived")',
+        ]) + '\\n')
         with self.assertRaisesRegex(ValueError, 'live evidence quota'):
             MOD.capture(self.child, self.log, 5)
         self.assertFalse(self.log.exists())
         self.assertFalse(marker.exists())
 
     def test_oversized_successful_child_never_publishes(self):
-        self.write(
-            'import sys\\n'
-            f'sys.stdout.buffer.write(b"Y"*{MOD.gate.MAX_LOG_BYTES+1})\\n'
-            'sys.stdout.buffer.flush()\\n'
-        .replace('\\\\n', '\\n'))
+        self.write('\\n'.join([
+            'import sys',
+            f'sys.stdout.buffer.write(b"Y"*{MOD.gate.MAX_LOG_BYTES+1})',
+            'sys.stdout.buffer.flush()',
+        ]) + '\\n')
         with self.assertRaisesRegex(ValueError, 'live evidence quota'):
             MOD.capture(self.child, self.log, 5)
         self.assertFalse(self.log.exists())
