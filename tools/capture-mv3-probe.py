@@ -76,6 +76,11 @@ def capture(probe: Path, output: Path, timeout: float, cwd: Path = ROOT) -> None
     if output.is_symlink():
         raise ValueError('Refuse symlink evidence destination')
     output.parent.mkdir(parents=True, exist_ok=True)
+    # Invalidate any previous green artifact before starting a new probe.
+    # Otherwise a failed/aborted run can leave a stale log at the expected
+    # upload path even though its current direct-child evidence was rejected.
+    # unlink removes the directory entry itself, never follows a symlink.
+    output.unlink(missing_ok=True)
     publication = None
     process = None
     captured = bytearray()
