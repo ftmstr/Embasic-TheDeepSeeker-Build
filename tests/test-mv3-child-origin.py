@@ -257,6 +257,87 @@ class ChildOriginCapture(unittest.TestCase):
             MOD.capture(self.child, self.log, 5)
         self.assertTrue(self.log.is_dir())
 
+    @unittest.skipUnless(os.name == 'posix', 'POSIX owner directory mode required')
+    def test_noncooperating_world_writable_parent_rejected_even_with_flock(self):
+        parent = self.root / 'shared-public'
+        parent.mkdir()
+        parent.chmod(0o1777)
+        log = parent / 'evidence.log'
+        self.write(script(MOD.gate.REQUIRED_PREFIXES))
+        with self.assertRaisesRegex(ValueError, 'not private to owner'):
+            MOD.capture(self.child, log, 5)
+        self.assertFalse(log.exists())
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX group-writable directory mode')
+    def test_noncooperating_group_writable_parent_rejected(self):
+        parent = self.root / 'group-shared'
+        parent.mkdir()
+        parent.chmod(0o770)
+        log = parent / 'evidence.log'
+        self.write(script(MOD.gate.REQUIRED_PREFIXES))
+        with self.assertRaisesRegex(ValueError, 'not private to owner'):
+            MOD.capture(self.child, log, 5)
+        self.assertFalse(log.exists())
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX chmod race regression')
+    def test_parent_permission_expands_while_child_runs_no_evidence(self):
+        parent = self.root / 'private-then-shared'
+        parent.mkdir(mode=0o700)
+        parent.chmod(0o700)
+        started = self.root / 'chmod-race-started'
+        log = parent / 'evidence.log'
+        self.write('import pathlib,time\n' +
+                   f'pathlib.Path({str(started)!r}).write_text("ready")\n' +
+                   'time.sleep(0.65)\n' +
+                   '\n'.join(f'print({(p+" real-OS-child checkpoint")!r},flush=True)'
+                             for p in MOD.gate.REQUIRED_PREFIXES) + '\n')
+        def change_permissions():
+            deadline = time.monotonic() + 3
+            while not started.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            if started.exists():
+                parent.chmod(0o777)
+        thread = threading.Thread(target=change_permissions)
+        thread.start()
+        try:
+            with self.assertRaisesRegex(ValueError, 'not private to owner'):
+                MOD.capture(self.child, log, 5)
+        finally:
+            thread.join(timeout=4)
+        self.assertTrue(started.exists())
+        self.assertFalse(log.exists())
+        self.assertFalse(any(x.name.startswith('.mv3-verified-') for x in parent.iterdir()))
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX symlink injection during capture')
+    def test_noncooperating_symlink_inserted_after_stale_unlink_is_rejected(self):
+        parent = self.root / 'private-evidence'
+        parent.mkdir()
+        log = parent / 'evidence.log'
+        victim = self.root / 'precious-original'
+        victim.write_text('safe', encoding='utf-8')
+        started = self.root / 'inject-started'
+        self.write('import pathlib,time\n' +
+                   f'pathlib.Path({str(started)!r}).write_text("ready")\n' +
+                   'time.sleep(0.65)\n' +
+                   '\n'.join(f'print({(p+" real-OS-child checkpoint")!r},flush=True)'
+                             for p in MOD.gate.REQUIRED_PREFIXES) + '\n')
+        def inject():
+            deadline = time.monotonic() + 3
+            while not started.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            if started.exists():
+                log.symlink_to(victim)
+        thread = threading.Thread(target=inject)
+        thread.start()
+        try:
+            with self.assertRaisesRegex(ValueError, 'symlink'):
+                MOD.capture(self.child, log, 5)
+        finally:
+            thread.join(timeout=4)
+        self.assertTrue(started.exists())
+        self.assertEqual(victim.read_text(encoding='utf-8'), 'safe')
+        self.assertTrue(log.is_symlink())
+
     def test_unbounded_timeout_rejected(self):
         self.write(script(MOD.gate.REQUIRED_PREFIXES))
         with self.assertRaisesRegex(ValueError, 'Unbounded'):

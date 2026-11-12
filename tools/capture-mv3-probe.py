@@ -87,6 +87,13 @@ def capture(probe: Path, output: Path, timeout: float, cwd: Path = ROOT) -> None
     publication_name = None
     if os.name == 'posix':
         directory_fd = os.open(output.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        def check_parent_permissions() -> None:
+            # TUR047: advisory flock does not exclude a non-cooperating writer.
+            # Reject group/world-writable or non-owned output parents.
+            # Same-UID/privileged writers and ACL/path races are not proven safe.
+            info = os.fstat(directory_fd)
+            if info.st_uid != os.geteuid() or info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+                raise ValueError('MV3 evidence parent directory is not private to owner')
         def check_destination() -> None:
             try:
                 entry = os.stat(output.name, dir_fd=directory_fd, follow_symlinks=False)
@@ -107,6 +114,7 @@ def capture(probe: Path, output: Path, timeout: float, cwd: Path = ROOT) -> None
                 fcntl.flock(directory_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as exc:
                 raise ValueError('Concurrent MV3 evidence capture; directory locked') from exc
+            check_parent_permissions()
             check_destination()
             try:
                 os.unlink(output.name, dir_fd=directory_fd)
@@ -198,6 +206,7 @@ def capture(probe: Path, output: Path, timeout: float, cwd: Path = ROOT) -> None
             pinned_stat = os.fstat(directory_fd)
             if (parent_stat.st_dev, parent_stat.st_ino) != (pinned_stat.st_dev, pinned_stat.st_ino):
                 raise ValueError('MV3 evidence parent directory changed identity')
+            check_parent_permissions()
             check_destination()
             os.replace(publication_name, output.name,
                        src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
