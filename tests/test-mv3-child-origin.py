@@ -1,4 +1,4 @@
-"""TUR040 real OS subprocess evidence capture adversarial regression."""
+"""TUR042 real OS bounded-pipe and process-tree capture adversarial regression."""
 import importlib.util
 import os
 import time
@@ -66,7 +66,7 @@ class ChildOriginCapture(unittest.TestCase):
             if marker.exists():
                 break
             time.sleep(0.05)
-        self.assertTrue(marker.exists(), 'late descendant did not execute')
+        self.assertFalse(marker.exists(), 'late descendant survived process-group cleanup')
         self.assertEqual(self.log.read_bytes(), validated,
                          'late writer mutated already-verified published evidence')
 
@@ -78,7 +78,7 @@ class ChildOriginCapture(unittest.TestCase):
 
     def test_real_process_timeout_cannot_publish_delayed_success(self):
         self.write(script(MOD.gate.REQUIRED_PREFIXES, sleep=1))
-        with self.assertRaisesRegex(ValueError, 'nonzero'):
+        with self.assertRaisesRegex(ValueError, 'timeout'):
             MOD.capture(self.child, self.log, 0.10)
         self.assertFalse(self.log.exists())
 
@@ -146,6 +146,44 @@ class ChildOriginCapture(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'live evidence quota'):
             MOD.capture(self.child, self.log, 5)
         self.assertFalse(self.log.exists())
+
+    def test_burst_over_quota_cannot_allocate_unbounded_scratch_file(self):
+        # TUR042 actual OS child produces a burst > 4 MiB between any polling
+        # samples. The parent drains from a pipe into <=2 MiB bounded storage.
+        self.write('import sys\nsys.stdout.buffer.write(b"B"*(4*1024*1024))\nsys.stdout.buffer.flush()\n')
+        with self.assertRaisesRegex(ValueError, 'bounded pipe'):
+            MOD.capture(self.child, self.log, 5)
+        self.assertFalse(self.log.exists())
+        self.assertFalse(any(p.name.startswith('.mv3-child-') for p in self.root.iterdir()))
+
+    def test_exact_quota_and_valid_pass_markers_do_not_bypass_evidence(self):
+        # A large, within-limit but malformed child must still fail gate.
+        self.write('import sys\nsys.stdout.buffer.write(b"Z"*2000000)\nsys.stdout.buffer.flush()\n')
+        with self.assertRaises(ValueError):
+            MOD.capture(self.child, self.log, 5)
+        self.assertFalse(self.log.exists())
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX process-group cleanup required')
+    def test_timeout_kills_real_descendant_process_group(self):
+        marker = self.root/'descendant-survived'
+        child_code = (
+            'import subprocess,sys,time\n'
+            f'code={"import time,pathlib;time.sleep(0.7);pathlib.Path("+repr(str(marker))+").write_text(\"escaped\")"!r}\n'
+            'subprocess.Popen([sys.executable,"-c",code])\n'
+            'time.sleep(4)\n'
+        )
+        self.write(child_code)
+        with self.assertRaisesRegex(ValueError, 'timeout'):
+            MOD.capture(self.child, self.log, 0.10)
+        time.sleep(0.8)
+        self.assertFalse(marker.exists(), 'timeout left a descendant alive')
+
+    def test_bounded_reader_used_not_scratch_file_polling(self):
+        source = (ROOT/'tools/capture-mv3-probe.py').read_text(encoding='utf-8')
+        self.assertIn("'stdout': subprocess.PIPE", source)
+        self.assertIn('len(captured) + len(part) > gate.MAX_LOG_BYTES', source)
+        self.assertIn("['taskkill', '/PID', str(process.pid), '/T', '/F']", source)
+        self.assertNotIn('NamedTemporaryFile(prefix=\'.mv3-child-\'', source)
 
     def test_ci_uses_direct_child_not_shell_tee_or_always_upload(self):
         workflow = (ROOT/'.github/workflows/ci.yml').read_text(encoding='utf-8')
