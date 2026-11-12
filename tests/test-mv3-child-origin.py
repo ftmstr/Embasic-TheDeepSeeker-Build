@@ -206,11 +206,11 @@ class ChildOriginCapture(unittest.TestCase):
         child1 = self.root / 'slow-first.py'
         child2 = self.root / 'fast-second.py'
         child1.write_text(
-            'import pathlib,time,sys\\n'
-            f'pathlib.Path({str(started)!r}).write_text("ready")\\n'
-            'time.sleep(0.7)\\n' +
-            '\\n'.join(f'print({(p+" real-OS-child checkpoint")!r},flush=True)'
-                      for p in MOD.gate.REQUIRED_PREFIXES) + '\\n',
+            'import pathlib,time,sys\n'
+            f'pathlib.Path({str(started)!r}).write_text("ready")\n'
+            'time.sleep(0.7)\n' +
+            '\n'.join(f'print({(p+" real-OS-child checkpoint")!r},flush=True)'
+                      for p in MOD.gate.REQUIRED_PREFIXES) + '\n',
             encoding='utf-8')
         child2.write_text(script(MOD.gate.REQUIRED_PREFIXES), encoding='utf-8')
         first = parent / 'first.log'
