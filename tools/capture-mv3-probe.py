@@ -12,7 +12,9 @@ import argparse
 import importlib.util
 import os
 from pathlib import Path
+import secrets
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -76,11 +78,26 @@ def capture(probe: Path, output: Path, timeout: float, cwd: Path = ROOT) -> None
     if output.is_symlink():
         raise ValueError('Refuse symlink evidence destination')
     output.parent.mkdir(parents=True, exist_ok=True)
-    # Invalidate any previous green artifact before starting a new probe.
-    # Otherwise a failed/aborted run can leave a stale log at the expected
-    # upload path even though its current direct-child evidence was rejected.
-    # unlink removes the directory entry itself, never follows a symlink.
-    output.unlink(missing_ok=True)
+    # TUR045: POSIX publication operations are pinned to the original parent
+    # directory fd, not a path that an adversary can replace with a symlink.
+    # This protects unlink, exclusive tempfile creation and atomic replace.
+    directory_fd = None
+    publication_name = None
+    if os.name == 'posix':
+        directory_fd = os.open(output.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        def check_destination() -> None:
+            try:
+                mode = os.stat(output.name, dir_fd=directory_fd, follow_symlinks=False).st_mode
+            except FileNotFoundError:
+                return
+            if stat.S_ISLNK(mode):
+                raise ValueError('Refuse symlink evidence destination')
+        check_destination()
+        os.unlink(output.name, dir_fd=directory_fd) if os.path.lexists(output) else None
+    else:
+        # Windows retains the conservative original path-based behavior; not
+        # an independently proved defense against a malicious parent rename.
+        output.unlink(missing_ok=True)
     publication = None
     process = None
     captured = bytearray()
@@ -144,16 +161,37 @@ def capture(probe: Path, output: Path, timeout: float, cwd: Path = ROOT) -> None
         with lock:
             raw = bytes(captured)
         gate.verify(raw, returncode)
-        with tempfile.NamedTemporaryFile(prefix='.mv3-verified-', suffix='.raw',
-                                         dir=output.parent, delete=False) as verified:
-            publication = Path(verified.name)
-            verified.write(raw)
-            verified.flush()
-            os.fsync(verified.fileno())
-        if output.is_symlink():
-            raise ValueError('Evidence destination changed into symlink')
-        os.replace(publication, output)
-        publication = None
+        if directory_fd is not None:
+            # Secure random exclusive name, relative to pinned directory.
+            publication_name = '.mv3-verified-' + secrets.token_hex(16) + '.raw'
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+            temp_fd = os.open(publication_name, flags, 0o600, dir_fd=directory_fd)
+            with os.fdopen(temp_fd, 'wb') as verified:
+                verified.write(raw)
+                verified.flush()
+                os.fsync(verified.fileno())
+            # A parent directory rename or symlink swap is a hard failure.
+            # Even if renamed after this check, the dirfd destination cannot
+            # escape into the attacker's replacement directory.
+            parent_stat = os.stat(output.parent, follow_symlinks=False)
+            pinned_stat = os.fstat(directory_fd)
+            if (parent_stat.st_dev, parent_stat.st_ino) != (pinned_stat.st_dev, pinned_stat.st_ino):
+                raise ValueError('MV3 evidence parent directory changed identity')
+            check_destination()
+            os.replace(publication_name, output.name,
+                       src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
+            publication_name = None
+        else:
+            with tempfile.NamedTemporaryFile(prefix='.mv3-verified-', suffix='.raw',
+                                             dir=output.parent, delete=False) as verified:
+                publication = Path(verified.name)
+                verified.write(raw)
+                verified.flush()
+                os.fsync(verified.fileno())
+            if output.is_symlink():
+                raise ValueError('Evidence destination changed into symlink')
+            os.replace(publication, output)
+            publication = None
         print(f'PASS MV3 DIRECT CHILD: exit=0, bytes={len(raw)}, bounded pipe; '
               'process origin NOT CRYPTOGRAPHICALLY PROVEN')
     finally:
@@ -166,6 +204,12 @@ def capture(probe: Path, output: Path, timeout: float, cwd: Path = ROOT) -> None
                 process.stdout.close()
         if publication is not None and publication.exists():
             publication.unlink()
+        if directory_fd is not None:
+            try:
+                if publication_name is not None:
+                    os.unlink(publication_name, dir_fd=directory_fd)
+            finally:
+                os.close(directory_fd)
 
 
 def main() -> int:
