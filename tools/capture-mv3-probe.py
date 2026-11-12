@@ -15,6 +15,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 PROBE = ROOT / 'tests' / 'test-mv3-extension.py'
@@ -45,17 +46,43 @@ def capture(probe: Path, output: Path, timeout: float, cwd: Path = ROOT) -> None
             command = [sys.executable, '-u', str(probe)]
             process = subprocess.Popen(command, cwd=cwd, stdout=file,
                                        stderr=subprocess.STDOUT, start_new_session=True)
-            try:
-                returncode = process.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                # Kill the entire subprocess group: no detached Chrome can
-                # append a late PASS to a previously timed-out evidence file.
-                if os.name == 'posix':
-                    os.killpg(process.pid, signal.SIGKILL)
-                else:
-                    process.kill()
-                process.wait(timeout=10)
-                returncode = 124
+            # TUR041: bound the *live* scratch-file growth rather than only
+            # checking its size after the child exits. A compromised test
+            # process must not write indefinitely until the 360s timeout.
+            # This polling guard is NOT an atomic OS disk quota: a very fast
+            # writer can overshoot between samples; runner disk limits remain
+            # an independent defence.
+            deadline = time.monotonic() + timeout
+            while True:
+                if os.fstat(file.fileno()).st_size > gate.MAX_LOG_BYTES:
+                    # Terminate the group before rejecting. Descendants may
+                    # retain descriptors, but the verified publication path
+                    # is never created for oversized evidence.
+                    try:
+                        if os.name == 'posix':
+                            os.killpg(process.pid, signal.SIGKILL)
+                        else:
+                            process.kill()
+                    except ProcessLookupError:
+                        pass
+                    process.wait(timeout=10)
+                    raise ValueError('Child MV3 stdout exceeded live evidence quota')
+                returncode = process.poll()
+                if returncode is not None:
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    try:
+                        if os.name == 'posix':
+                            os.killpg(process.pid, signal.SIGKILL)
+                        else:
+                            process.kill()
+                    except ProcessLookupError:
+                        pass
+                    process.wait(timeout=10)
+                    returncode = 124
+                    break
+                time.sleep(min(0.02, remaining))
             file.flush()
             os.fsync(file.fileno())
             raw_size = scratch.stat().st_size
