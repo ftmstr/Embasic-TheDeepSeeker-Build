@@ -94,6 +94,17 @@ def capture(probe: Path, output: Path, timeout: float, cwd: Path = ROOT) -> None
             info = os.fstat(directory_fd)
             if info.st_uid != os.geteuid() or info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
                 raise ValueError('MV3 evidence parent directory is not private to owner')
+        def check_ancestor_symlinks() -> None:
+            # A final-component O_NOFOLLOW does not reject a symlink in an
+            # ancestor. Path inspections are NOT atomic against same-UID
+            # replacements; the pinned directory inode remains authoritative.
+            ancestor = output.parent.absolute()
+            while True:
+                if stat.S_ISLNK(os.lstat(ancestor).st_mode):
+                    raise ValueError('MV3 evidence ancestor symlink forbidden')
+                if ancestor.parent == ancestor:
+                    break
+                ancestor = ancestor.parent
         def check_destination() -> None:
             try:
                 entry = os.stat(output.name, dir_fd=directory_fd, follow_symlinks=False)
@@ -114,6 +125,7 @@ def capture(probe: Path, output: Path, timeout: float, cwd: Path = ROOT) -> None
                 fcntl.flock(directory_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as exc:
                 raise ValueError('Concurrent MV3 evidence capture; directory locked') from exc
+            check_ancestor_symlinks()
             check_parent_permissions()
             check_destination()
             try:
@@ -129,6 +141,7 @@ def capture(probe: Path, output: Path, timeout: float, cwd: Path = ROOT) -> None
         output.unlink(missing_ok=True)
     publication = None
     process = None
+    pending_published_inode = None
     captured = bytearray()
     lock = threading.Lock()
     oversize = threading.Event()
@@ -199,6 +212,11 @@ def capture(probe: Path, output: Path, timeout: float, cwd: Path = ROOT) -> None
                 verified.write(raw)
                 verified.flush()
                 os.fsync(verified.fileno())
+            # Capture the immutable inode identity while our exclusive temp
+            # descriptor exists. A same-UID outsider can still mutate/replace
+            # this file after any final check; we only detect observed races.
+            published_identity = os.stat(publication_name, dir_fd=directory_fd,
+                                         follow_symlinks=False)
             # A parent directory rename or symlink swap is a hard failure.
             # Even if renamed after this check, the dirfd destination cannot
             # escape into the attacker's replacement directory.
@@ -206,11 +224,43 @@ def capture(probe: Path, output: Path, timeout: float, cwd: Path = ROOT) -> None
             pinned_stat = os.fstat(directory_fd)
             if (parent_stat.st_dev, parent_stat.st_ino) != (pinned_stat.st_dev, pinned_stat.st_ino):
                 raise ValueError('MV3 evidence parent directory changed identity')
+            check_ancestor_symlinks()
+            check_ancestor_symlinks()
             check_parent_permissions()
             check_destination()
             os.replace(publication_name, output.name,
                        src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
             publication_name = None
+            pending_published_inode = (published_identity.st_dev, published_identity.st_ino)
+            # TUR048: read back *the same inode* through the pinned dirfd,
+            # with no symlink following and bounded bytes. Detect a writer
+            # that races atomic rename and print(PASS). This does NOT prevent
+            # a privileged/same-UID attacker writing after validation.
+            read_fd = os.open(output.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                              dir_fd=directory_fd)
+            try:
+                read_stat = os.fstat(read_fd)
+                if (read_stat.st_dev, read_stat.st_ino) != pending_published_inode:
+                    raise ValueError('MV3 published evidence inode changed')
+                if not stat.S_ISREG(read_stat.st_mode) or read_stat.st_nlink != 1:
+                    raise ValueError('MV3 published evidence is not private regular inode')
+                with os.fdopen(read_fd, 'rb', closefd=False) as reader:
+                    if reader.read(gate.MAX_LOG_BYTES + 1) != raw or reader.read(1):
+                        raise ValueError('MV3 published evidence bytes changed')
+            finally:
+                os.close(read_fd)
+            # A second name+directory check spots common rename-after-open
+            # and permission-expansion races but cannot provide mutual exclusion.
+            final_stat = os.stat(output.name, dir_fd=directory_fd, follow_symlinks=False)
+            if (final_stat.st_dev, final_stat.st_ino) != pending_published_inode:
+                raise ValueError('MV3 published evidence name changed inode')
+            check_ancestor_symlinks()
+            parent_stat = os.stat(output.parent, follow_symlinks=False)
+            if (parent_stat.st_dev, parent_stat.st_ino) != (pinned_stat.st_dev, pinned_stat.st_ino):
+                raise ValueError('MV3 evidence parent directory changed identity after publication')
+            check_parent_permissions()
+            os.fsync(directory_fd)
+            pending_published_inode = None
         else:
             with tempfile.NamedTemporaryFile(prefix='.mv3-verified-', suffix='.raw',
                                              dir=output.parent, delete=False) as verified:
@@ -236,6 +286,17 @@ def capture(probe: Path, output: Path, timeout: float, cwd: Path = ROOT) -> None
             publication.unlink()
         if directory_fd is not None:
             try:
+                if pending_published_inode is not None:
+                    # On a failed post-publication readback, clean up only
+                    # our own inode. Do not delete a replacement owned by an
+                    # uncooperative actor: its existence is NOT valid evidence.
+                    try:
+                        current = os.stat(output.name, dir_fd=directory_fd,
+                                          follow_symlinks=False)
+                        if (current.st_dev, current.st_ino) == pending_published_inode:
+                            os.unlink(output.name, dir_fd=directory_fd)
+                    except OSError:
+                        pass
                 if publication_name is not None:
                     os.unlink(publication_name, dir_fd=directory_fd)
             finally:
