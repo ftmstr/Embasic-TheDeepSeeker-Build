@@ -11,6 +11,8 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import os
+if os.name == 'posix':
+    import fcntl
 from pathlib import Path
 import secrets
 import signal
@@ -87,12 +89,24 @@ def capture(probe: Path, output: Path, timeout: float, cwd: Path = ROOT) -> None
         directory_fd = os.open(output.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         def check_destination() -> None:
             try:
-                mode = os.stat(output.name, dir_fd=directory_fd, follow_symlinks=False).st_mode
+                entry = os.stat(output.name, dir_fd=directory_fd, follow_symlinks=False)
             except FileNotFoundError:
                 return
-            if stat.S_ISLNK(mode):
+            if stat.S_ISLNK(entry.st_mode):
                 raise ValueError('Refuse symlink evidence destination')
+            # Reject a hardlinked destination before destructive stale-log
+            # invalidation. A hardlink's data could be another file's evidence.
+            if not stat.S_ISREG(entry.st_mode) or entry.st_nlink != 1:
+                raise ValueError('Refuse hardlink or nonregular evidence destination')
         try:
+            # TUR046: concurrent trusted probes must not invalidate each
+            # other's in-flight evidence. Linux/POSIX advisory flock is scoped
+            # to the pinned directory inode and held through publication.
+            # Malicious non-cooperating writers and Windows are NOT covered.
+            try:
+                fcntl.flock(directory_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise ValueError('Concurrent MV3 evidence capture; directory locked') from exc
             check_destination()
             try:
                 os.unlink(output.name, dir_fd=directory_fd)
