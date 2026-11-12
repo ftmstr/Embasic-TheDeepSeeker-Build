@@ -2,6 +2,7 @@
 import importlib.util
 import os
 import threading
+from unittest import mock
 import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -337,6 +338,57 @@ class ChildOriginCapture(unittest.TestCase):
         self.assertTrue(started.exists())
         self.assertEqual(victim.read_text(encoding='utf-8'), 'safe')
         self.assertTrue(log.is_symlink())
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX pinned-inode readback')
+    def test_same_uid_postreplace_same_inode_content_tampering_is_rejected(self):
+        self.write(script(MOD.gate.REQUIRED_PREFIXES))
+        original = os.replace
+        def tamper(*args, **kwargs):
+            original(*args, **kwargs)
+            self.log.write_bytes(b'forged-after-atomic-rename')
+        with mock.patch.object(MOD.os, 'replace', side_effect=tamper):
+            with self.assertRaisesRegex(ValueError, 'bytes changed'):
+                MOD.capture(self.child, self.log, 5)
+        # Cleanup only removes the inode we created; forged data fails closed.
+        self.assertFalse(self.log.exists())
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX pinned-inode readback')
+    def test_same_uid_postreplace_inode_swap_rejected_without_deleting_replacement(self):
+        self.write(script(MOD.gate.REQUIRED_PREFIXES))
+        attacker = self.root / 'same-uid-file'
+        attacker.write_bytes(b'unsafe forged evidence')
+        original = os.replace
+        def swap(*args, **kwargs):
+            original(*args, **kwargs)
+            original(attacker, self.log)
+        with mock.patch.object(MOD.os, 'replace', side_effect=swap):
+            with self.assertRaisesRegex(ValueError, 'inode changed'):
+                MOD.capture(self.child, self.log, 5)
+        # Attacker's file remains untrusted; do not silently delete foreign inode.
+        self.assertEqual(self.log.read_bytes(), b'unsafe forged evidence')
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX ancestor symlink inspection')
+    def test_symlink_ancestor_denied_even_if_final_parent_is_regular(self):
+        actual = self.root / 'actual-parent'
+        actual.mkdir()
+        (actual / 'private').mkdir()
+        alias = self.root / 'ancestor-alias'
+        alias.symlink_to(actual, target_is_directory=True)
+        log = alias / 'private' / 'proof.log'
+        self.write(script(MOD.gate.REQUIRED_PREFIXES))
+        with self.assertRaisesRegex(ValueError, 'ancestor symlink'):
+            MOD.capture(self.child, log, 5)
+        self.assertFalse((actual / 'private' / 'proof.log').exists())
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX actual OS races')
+    def test_noncooperating_same_uid_after_success_can_still_mutate_evidence(self):
+        # Negative threat-model counterexample. This is intentionally possible;
+        # do not count a previous successful readback as future integrity.
+        self.write(script(MOD.gate.REQUIRED_PREFIXES))
+        MOD.capture(self.child, self.log, 5)
+        old = self.log.read_bytes()
+        self.log.write_bytes(b'same UID can rewrite later')
+        self.assertNotEqual(self.log.read_bytes(), old)
 
     def test_unbounded_timeout_rejected(self):
         self.write(script(MOD.gate.REQUIRED_PREFIXES))
