@@ -75,6 +75,23 @@ class ChildOriginCapture(unittest.TestCase):
             self.assertEqual(self.log.read_bytes(), validated,
                              'late writer mutated already-verified published evidence')
 
+    @unittest.skipUnless(os.name == 'posix', 'POSIX inherited stdout descriptor regression')
+    def test_retained_descendant_stdout_cannot_publish_partial_success(self):
+        # The direct child emits all nine valid markers, exits zero, but a
+        # descendant retains the shared pipe beyond the bounded drain.
+        # Previous snapshot-only acceptance could publish this incomplete
+        # stream even though the pipe had not reached EOF.
+        descendant = 'import time;time.sleep(2)'
+        lines = ['import subprocess,sys',
+                 f'subprocess.Popen([sys.executable,"-c",{descendant!r}],'
+                 'stdout=sys.stdout,stderr=sys.stderr,close_fds=False)']
+        lines += [f'print({(p+" real-OS-child checkpoint")!r},flush=True)'
+                  for p in MOD.gate.REQUIRED_PREFIXES]
+        self.write('\\n'.join(lines)+'\\n')
+        with self.assertRaisesRegex(ValueError, 'pipe remained open'):
+            MOD.capture(self.child, self.log, 5)
+        self.assertFalse(self.log.exists())
+
     def test_forged_pass_lines_from_failing_os_process_rejected(self):
         self.write(script(MOD.gate.REQUIRED_PREFIXES, exit_code=7))
         with self.assertRaisesRegex(ValueError, 'nonzero'):
