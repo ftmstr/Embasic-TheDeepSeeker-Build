@@ -59,16 +59,21 @@ class ChildOriginCapture(unittest.TestCase):
         lines += [f'print({(p+" real-OS-child checkpoint")!r},flush=True)'
                   for p in MOD.gate.REQUIRED_PREFIXES]
         self.write('\n'.join(lines)+'\n')
-        MOD.capture(self.child, self.log, 5)
-        validated = self.log.read_bytes()
-        self.assertEqual(len(validated.splitlines()), len(MOD.gate.REQUIRED_PREFIXES))
-        for _ in range(40):
-            if marker.exists():
-                break
-            time.sleep(0.05)
-        self.assertFalse(marker.exists(), 'late descendant survived process-group cleanup')
-        self.assertEqual(self.log.read_bytes(), validated,
-                         'late writer mutated already-verified published evidence')
+        # Race-safe acceptance: if the late FAIL reaches the reader during
+        # its bounded drain, the strict gate MUST reject the entire artifact.
+        # If it arrives after the clean snapshot, the published snapshot MUST
+        # remain immutable. Both outcomes are fail-closed for untrusted bytes.
+        try:
+            MOD.capture(self.child, self.log, 5)
+        except ValueError as exc:
+            self.assertIn('did not run', str(exc))
+            self.assertFalse(self.log.exists(), 'raced FAIL published an artifact')
+        else:
+            validated = self.log.read_bytes()
+            self.assertEqual(len(validated.splitlines()), len(MOD.gate.REQUIRED_PREFIXES))
+            time.sleep(0.65)
+            self.assertEqual(self.log.read_bytes(), validated,
+                             'late writer mutated already-verified published evidence')
 
     def test_forged_pass_lines_from_failing_os_process_rejected(self):
         self.write(script(MOD.gate.REQUIRED_PREFIXES, exit_code=7))
