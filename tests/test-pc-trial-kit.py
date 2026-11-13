@@ -2,6 +2,8 @@
 import importlib.util
 import hashlib
 import json
+import os
+import subprocess
 import tempfile
 import zipfile
 from pathlib import Path
@@ -38,6 +40,17 @@ with tempfile.TemporaryDirectory(prefix='embasic-pc-kit-test-') as tmp:
         assert z.read('EMBASIC_EXTENSION/manifest.json') == initial.read('manifest.json')
     second = builder.build(original, root, 'TUR058')
     assert hashlib.sha256(second.read_bytes()).hexdigest() == expected_hash
+    # On the *real Windows CI runner* execute the exact end-user PowerShell
+    # verifier from the extracted kit. This is NOT physical Windows Chrome MV3.
+    if os.name == 'nt':
+        expanded = root / 'unpacked'
+        with zipfile.ZipFile(target) as packaged:
+            packaged.extractall(expanded)
+        verified = subprocess.run(
+            ['pwsh', '-NoProfile', '-NonInteractive', '-File', str(expanded / 'verify-pc-kit.ps1')],
+            capture_output=True, text=True, timeout=75, check=True)
+        assert 'PASS 15/15' in verified.stdout, verified.stdout
+        print('PASS TUR058 real Windows PowerShell extracted ZIP verifier 15/15; physical Chrome NOT_RUN')
     # Wrong manifest and appended untrusted file fail closed, never emitted as valid.
     broken = root / 'corrupted.zip'
     with zipfile.ZipFile(original) as z, zipfile.ZipFile(broken, 'w') as w:
