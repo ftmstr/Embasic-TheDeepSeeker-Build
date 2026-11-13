@@ -58,8 +58,9 @@ def build(chrome_zip: Path, out_dir: Path, tur: str = 'TUR058') -> Path:
     client_id = manifest.get('oauth2', {}).get('client_id', '')
     if not client_id.startswith('YOUR_'):
         raise ValueError('This local-only trial expects an unconfigured OAuth placeholder')
-    docs = blob(ROOT / 'docs/PC_ILK_KULLANIM_TUR058.md')
-    ps1 = blob(ROOT / 'tools/verify-pc-kit.ps1')
+    # Keep the shipped text byte-stable if Git's Windows checkout maps LF to CRLF.
+    docs = blob(ROOT / 'docs/PC_ILK_KULLANIM_TUR058.md').replace(b'\r\n', b'\n')
+    ps1 = blob(ROOT / 'tools/verify-pc-kit.ps1').replace(b'\r\n', b'\n')
     checks = ''.join(f'{sha256(contents[name])}  {name}\n' for name in sorted(contents))
     extras = {
         'START_HERE.txt': (
