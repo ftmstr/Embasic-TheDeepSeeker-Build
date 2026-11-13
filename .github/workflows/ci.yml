@@ -46,6 +46,7 @@ jobs:
           python tests/test-mv3-pinned-local-bundle.py
           python tests/test-mv3-posix-acl-xattr-boundary.py
           python tests/test-mv3-ancestor-fd-topology-boundary.py
+          python tests/test-pc-trial-kit.py
   simulated-chromium-ui:
     name: Mocked Chromium UI only (not real MV3)
     # Pin a supported, stable Ubuntu LTS; ubuntu-latest resolved to 26.10
@@ -111,6 +112,8 @@ jobs:
           # A green CI job must never hide timeout, NOT_RUN, missing evidence,
           # duplicate checkpoints, or a failed probe behind the mocked UI.
           python tools/verify-mv3-ci-evidence.py --log "$RUNNER_TEMP/tur040-mv3-probe.log" --exit-code 0
+          # TUR058: genuine Chromium extension GUI first-run user journey; no provider mutation.
+          python tests/test-pc-first-run-real-mv3.py
       - uses: actions/upload-artifact@v4
         if: success()
         with:
@@ -187,6 +190,7 @@ jobs:
       - run: python tests/test-mv3-pinned-local-bundle.py
       - run: python tests/test-mv3-posix-acl-xattr-boundary.py
       - run: python tests/test-mv3-ancestor-fd-topology-boundary.py
+      - run: python tests/test-pc-trial-kit.py
   provenance-archives:
     name: CI source/Chrome ZIP Git blob and CRC parity (NOT live MV3)
     runs-on: ubuntu-latest
@@ -228,6 +232,14 @@ jobs:
           BRANCH="${{ steps.turn.outputs.branch }}"
           python tools/build-release-artifacts.py --tur "$TUR" --branch "$BRANCH" --out-dir "$RUNNER_TEMP/embasic-current"
           python tools/build-release-artifacts.py --tur "$TUR" --branch "$BRANCH" --out-dir "$RUNNER_TEMP/embasic-repeat"
+          # TUR058 reproducible manual Chrome unpacked kit built only from exact-head ZIP.
+          for folder in embasic-current embasic-repeat; do
+            python tools/build-pc-trial-kit.py --tur "$TUR" \
+              --chrome-zip "$RUNNER_TEMP/$folder/EMBASIC_TheDeepSeeker_${TUR}_Chrome_MV3.zip" \
+              --out-dir "$RUNNER_TEMP/$folder"
+          done
+          diff -q "$RUNNER_TEMP/embasic-current/${TUR}_PC_KIT_SHA256.txt" "$RUNNER_TEMP/embasic-repeat/${TUR}_PC_KIT_SHA256.txt"
+          (cd "$RUNNER_TEMP/embasic-current" && sha256sum -c "${TUR}_PC_KIT_SHA256.txt")
           diff -q "$RUNNER_TEMP/embasic-current/SHA256SUMS.txt" "$RUNNER_TEMP/embasic-repeat/SHA256SUMS.txt"
           diff -q "$RUNNER_TEMP/embasic-current/GitHub_tracked_blob_provenance.json" "$RUNNER_TEMP/embasic-repeat/GitHub_tracked_blob_provenance.json"
           (cd "$RUNNER_TEMP/embasic-current" && sha256sum -c SHA256SUMS.txt)
