@@ -15,6 +15,7 @@ try:
 except ImportError:  # Windows: POSIX-only reader must fail closed, not raise ImportError.
     fcntl = None
 import importlib.util
+from contextlib import contextmanager
 import errno
 import os
 from pathlib import Path
@@ -62,12 +63,62 @@ def _fingerprint(s):
             s.st_size, s.st_mtime_ns, s.st_ctime_ns)
 
 
-def _ancestor_scan(path: Path) -> None:
-    # An ancestor lstat sweep is BEST-EFFORT and NOT race-free; only the leaf
-    # directory O_NOFOLLOW and final path identity checks are pinned.
-    for part in (path, *path.parents):
-        if stat.S_ISLNK(part.lstat().st_mode):
-            raise LocalBundleNoGo('symlink in local ancestor chain')
+def _directory_identity(s):
+    # Never compare ancestor mtime/ctime: unrelated users can add entries to
+    # /tmp between checks. Identity, type, mode and owner are the local guards.
+    return (s.st_dev, s.st_ino, stat.S_IFMT(s.st_mode), s.st_mode & 0o7777, s.st_uid)
+
+
+@contextmanager
+def _pinned_directory_chain(directory: Path):
+    """Walk every ancestor from / using O_NOFOLLOW pinned directory FDs.
+
+    Previous lstat(path.parents) was best effort and independently raceable.
+    This fd-relative component walk refuses symlink components even if they
+    change before the final directory open. The chain is checked again before
+    returning; it is NOT atomic against transient ABA swaps nor post-return
+    same-UID/root mutation. No external identity is authenticated here.
+    """
+    path = directory.absolute()
+    if '..' in path.parts or not path.is_absolute():
+        raise LocalBundleNoGo('noncanonical directory ancestry')
+    if not (hasattr(os, 'O_DIRECTORY') and hasattr(os, 'O_NOFOLLOW') and
+            hasattr(os, 'open') and hasattr(os, 'stat')):
+        raise LocalBundleNoGo('pinned ancestor inspection unsupported')
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, 'O_CLOEXEC', 0)
+    chain = []
+    try:
+        rootfd = os.open(path.anchor, flags)
+        chain.append(('', rootfd, os.fstat(rootfd)))
+        for component in path.parts[1:]:
+            if component in ('', '.', '..'):
+                raise LocalBundleNoGo('unsafe ancestor component')
+            parentfd = chain[-1][1]
+            fd = os.open(component, flags, dir_fd=parentfd)
+            chain.append((component, fd, os.fstat(fd)))
+            st = os.stat(component, dir_fd=parentfd, follow_symlinks=False)
+            if (_directory_identity(st) != _directory_identity(chain[-1][2]) or
+                    not stat.S_ISDIR(st.st_mode)):
+                raise LocalBundleNoGo('ancestor component identity changed while opening')
+        if not chain or len(chain) < 2:
+            raise LocalBundleNoGo('local bundle must not be filesystem root')
+        _verify_pinned_directory_chain(chain)
+        yield chain[-1][1], chain
+    finally:
+        for _, fd, _ in reversed(chain):
+            os.close(fd)
+
+
+def _verify_pinned_directory_chain(chain) -> None:
+    for i, (component, fd, before) in enumerate(chain):
+        now = os.fstat(fd)
+        if not stat.S_ISDIR(now.st_mode) or _directory_identity(now) != _directory_identity(before):
+            raise LocalBundleNoGo('pinned ancestor metadata changed')
+        if i:
+            parentfd = chain[i - 1][1]
+            current = os.stat(component, dir_fd=parentfd, follow_symlinks=False)
+            if not stat.S_ISDIR(current.st_mode) or _directory_identity(current) != _directory_identity(before):
+                raise LocalBundleNoGo('ancestor path rebound from pinned inode')
 
 
 def _open_leaf(parent_fd: int, name: str, owner: int):
@@ -116,10 +167,7 @@ def read_local_claim_bundle(directory: Path, *, expected_repository: str,
     if not isinstance(directory, Path):
         raise LocalBundleNoGo('directory must be exact Path object')
     try:
-        _ancestor_scan(directory.absolute())
-        dfd = os.open(directory, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) |
-                      getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0))
-        try:
+        with _pinned_directory_chain(directory) as (dfd, chain):
             owner = os.geteuid()
             parent_before = os.fstat(dfd)
             if (not stat.S_ISDIR(parent_before.st_mode) or
@@ -174,11 +222,10 @@ def read_local_claim_bundle(directory: Path, *, expected_repository: str,
                         (parent_path_now.st_dev, parent_path_now.st_ino) !=
                         (parent_before.st_dev, parent_before.st_ino)):
                     raise LocalBundleNoGo('local parent directory path identity changed')
+                _verify_pinned_directory_chain(chain)
                 return result, len(root) + len(wire)
             finally:
                 for _, fd, _ in opened:
                     os.close(fd)
-        finally:
-            os.close(dfd)
     except (OSError, UnicodeError, ImportError, TypeError, AttributeError, OverflowError) as exc:
         raise LocalBundleNoGo('local snapshot unavailable or unsafe (fail closed)') from exc
