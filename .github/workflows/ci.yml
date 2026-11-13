@@ -134,12 +134,44 @@ jobs:
           EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python tools/verify-ci-checkout.py --expected-sha "$env:EXPECTED_SHA"
 
-      - name: Run Node regressions
+      # TUR055 closure: explicit per-test process supervision. The prior
+      # unbounded native PowerShell loop could remain IN_PROGRESS indefinitely
+      # with no failed test identity or usable CI logs. Never treat timeout as
+      # success, skip tests, or substitute Ubuntu for Windows structural checks.
+      - name: Run Node regressions (95 exact; bounded individual child processes)
         shell: pwsh
+        timeout-minutes: 25
         run: |
-          $tests = @(Get-ChildItem tests/test-*.cjs)
+          $ErrorActionPreference = 'Stop'
+          $tests = @(Get-ChildItem tests/test-*.cjs | Sort-Object Name)
           if ($tests.Count -ne 95) { throw "Expected 95 Node tests, got $($tests.Count)" }
-          foreach ($test in $tests) { node $test.FullName; if ($LASTEXITCODE -ne 0) { throw "FAIL: $($test.Name)" } }
+          $nodePath = (Get-Command node -ErrorAction Stop).Source
+          $passed = 0
+          foreach ($test in $tests) {
+            Write-Host "BEGIN Node test $($passed + 1)/95 : $($test.Name)"
+            $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+            $startInfo.FileName = $nodePath
+            $startInfo.UseShellExecute = $false
+            [void]$startInfo.ArgumentList.Add($test.FullName)
+            $child = [System.Diagnostics.Process]::Start($startInfo)
+            if ($null -eq $child) { throw "FAIL to start Node test: $($test.Name)" }
+            try {
+              if (-not $child.WaitForExit(90000)) {
+                try { $child.Kill($true) } catch { Write-Warning "Best-effort process tree kill: $_" }
+                [void]$child.WaitForExit(10000)
+                throw "TIMEOUT (90 seconds) FAIL-CLOSED Node test $($test.Name)"
+              }
+              if ($child.ExitCode -ne 0) {
+                throw "FAIL Node test $($test.Name), exit code $($child.ExitCode)"
+              }
+              $passed++
+              Write-Host "PASS Node test $passed/95 : $($test.Name)"
+            } finally {
+              $child.Dispose()
+            }
+          }
+          if ($passed -ne 95) { throw "FAIL Node count: $passed/95" }
+          Write-Host 'PASS all 95 independently bounded Windows Node scripts'
       - run: python tests/test-package.py
       - run: python tests/test-release-turn.py
       - run: python tests/test-mv3-ci-gate.py
