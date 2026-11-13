@@ -15,6 +15,7 @@ try:
 except ImportError:  # Windows: POSIX-only reader must fail closed, not raise ImportError.
     fcntl = None
 import importlib.util
+import errno
 import os
 from pathlib import Path
 import re
@@ -29,6 +30,32 @@ _WIRE_FILE = 'claimed-wire.jsonl'
 class LocalBundleNoGo(ValueError):
     """Fail-closed LOCAL filesystem consistency, not external provenance."""
 
+
+
+def _reject_extended_posix_acl(fd: int, *, is_directory: bool) -> None:
+    """Reject even *masked/ineffective* named POSIX ACLs on pinned open FDs.
+
+    UNIX st_mode alone cannot establish the absence of named ACL entries (a
+    named ACE may be masked to zero, leaving 0600/0700 mode unchanged). A
+    directory default ACL is also rejected before any future inheritance.
+    This is only a local snapshot restriction; FD permissions, root and
+    same-UID post-return mutation remain explicitly untrusted.
+
+    Unexpected/unsupported attribute lookup must fail closed, never be
+    interpreted as an empty ACL. ENODATA/ENOATTR mean absent attribute.
+    """
+    if not hasattr(os, 'getxattr'):
+        raise LocalBundleNoGo('POSIX ACL absence cannot be checked')
+    absent = {errno.ENODATA, getattr(errno, 'ENOATTR', errno.ENODATA)}
+    names = ('system.posix_acl_access', 'system.posix_acl_default') if is_directory else ('system.posix_acl_access',)
+    for name in names:
+        try:
+            os.getxattr(fd, name)  # fd, not an ancestor-raceable pathname
+        except OSError as exc:
+            if exc.errno in absent:
+                continue
+            raise LocalBundleNoGo('POSIX ACL inspection unavailable (fail closed)') from exc
+        raise LocalBundleNoGo('extended POSIX ACL on local witness inode')
 
 def _fingerprint(s):
     return (s.st_dev, s.st_ino, s.st_mode, s.st_uid, s.st_nlink,
@@ -49,6 +76,7 @@ def _open_leaf(parent_fd: int, name: str, owner: int):
     fd = os.open(name, flags, dir_fd=parent_fd)
     try:
         before = os.fstat(fd)
+        _reject_extended_posix_acl(fd, is_directory=False)
         if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or
                 before.st_uid != owner or before.st_mode & 0o077 or
                 not 0 < before.st_size <= (_MAX_FILE if name == _WIRE_FILE else 65)):
@@ -97,6 +125,7 @@ def read_local_claim_bundle(directory: Path, *, expected_repository: str,
             if (not stat.S_ISDIR(parent_before.st_mode) or
                     parent_before.st_uid != owner or parent_before.st_mode & 0o077):
                 raise LocalBundleNoGo('local directory must be owner-private')
+            _reject_extended_posix_acl(dfd, is_directory=True)
             fcntl.flock(dfd, fcntl.LOCK_SH | fcntl.LOCK_NB)
             opened = []
             try:
@@ -132,12 +161,14 @@ def read_local_claim_bundle(directory: Path, *, expected_repository: str,
                 except module.LocalWireNoGo as exc:
                     raise LocalBundleNoGo('local structural wire inconsistency') from exc
                 for name, fd, before in opened:
+                    _reject_extended_posix_acl(fd, is_directory=False)
                     after = os.fstat(fd)
                     path_now = os.stat(name, dir_fd=dfd, follow_symlinks=False)
                     if (_fingerprint(before) != _fingerprint(after) or
                             (path_now.st_dev, path_now.st_ino) != (before.st_dev, before.st_ino) or
                             not stat.S_ISREG(path_now.st_mode) or path_now.st_nlink != 1):
                         raise LocalBundleNoGo('local leaf inode changed during audit')
+                _reject_extended_posix_acl(dfd, is_directory=True)
                 parent_path_now = os.stat(directory, follow_symlinks=False)
                 if (_fingerprint(parent_before) != _fingerprint(os.fstat(dfd)) or
                         (parent_path_now.st_dev, parent_path_now.st_ino) !=
